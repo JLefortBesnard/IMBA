@@ -10,7 +10,7 @@ importlib.reload(MetaAnalysesAlgorithms)
 
 # starting point
 K=20 # nb of teams
-J=50 # nb of voxels
+J=20000 # nb of voxels
 
 # simulation 0
 sigma=1
@@ -28,7 +28,7 @@ print("RUNNING SIMULATION 0")
 # => any sensible method should work fine.
 # generate iid matrix of dimension K columns, J rows
 #######################################
-# generate betas
+# generate sample 
 rng = numpy.random.default_rng()
 matrix_betas = mu + sigma * rng.standard_normal(size=(K,J))
 
@@ -37,8 +37,8 @@ results_dir = "results_simulations/simulation0"
 if not os.path.exists(results_dir):
     os.mkdir(results_dir)
 # launch analyses
-MetaAnalysesAlgorithms.run_all_MA_algorithms(results_dir, matrix_betas)
 utils.plot_generated_data("simulation0", matrix_betas, results_dir)
+MetaAnalysesAlgorithms.run_all_MA_algorithms(results_dir, matrix_betas)
 
 
 print("RUNNING SIMULATION 1")

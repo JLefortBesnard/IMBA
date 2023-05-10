@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from nilearn.datasets import load_mni152_gm_mask, load_mni152_gm_template
 from nilearn.datasets import load_mni152_wm_mask, load_mni152_brain_mask
 import seaborn
+import sklearn.metrics
 import importlib
 
 import utils
@@ -209,7 +210,8 @@ for hyp in hypnums:
     if hyp != 9: # because nothing was significant in hyp 9 so 0 voxel in the mask
         # compute Q with narps mask
         print("masking with narps mask...")
-        mask_narps = "/home/jlefortb/IBMA/masking/hyp{}_narps_mask.nii.gz".format(hyp)
+        mask_narps = "/home/jlefortb/IMBA/masking/hyp{}_narps_mask.nii.gz".format(hyp)
+        print("nb voxel in mask hyp {} = {}".format(hyp, nibabel.load(mask_narps).get_fdata().sum()))
         masker = nilearn.input_data.NiftiMasker(
                 mask_img=mask_narps)
         data = masker.fit_transform(unthreshold_maps_resampled)
@@ -238,6 +240,11 @@ for hyp in hypnums:
     print(hyp)
     correlation_matrices = glob.glob('{}/temp/Q_*_hyp{}.npy'.format(results_dir, hyp))
     correlation_matrices.sort()
+    # put the participant mask at index 0 to fit louvain and sorting according
+    # to participant mask and not frontal mask (originaly at index 0)
+    new_order = [3, 0, 1, 2, 4, 5, 6] if hyp==9 else [3, 0, 1, 2, 4, 5, 6, 7]
+    correlation_matrices = [correlation_matrices[ind] for ind in new_order]
+
     f, axs = plt.subplots(4, 6, figsize=(15, 15))  
     for ind, matrice in enumerate(correlation_matrices):
         matrix = numpy.load(matrice)
@@ -270,9 +277,73 @@ for hyp in hypnums:
         axs[-1, 5].axis('off') # get rid of matrice using mask from narps (it's empty)
         axs[-1, 1].axis('off') # get rid of matrice using mask from narps (it's empty)
         axs[-1, 3].axis('off') # get rid of matrice using mask from narps (it's empty)
+    else:
+        mask_narps = "/home/jlefortb/IMBA/masking/hyp{}_narps_mask.nii.gz".format(hyp)
+        # add nb sign voxel in title for narps sign mask 
+        title_nb_voxel = (title 
+                        + '\n nb_sign_voxel='
+                        + '\n' + str(nibabel.load(mask_narps).get_fdata().sum()))
+        axs[0, 1].title.set_text(title_nb_voxel)
     plt.suptitle('hyp  {}'.format(hyp))
+    f.subplots_adjust(top=0.78) 
+    plt.figtext(0.1,0.95,"Original", va="center", ha="center", size=12)
+    plt.figtext(0.5,0.95,"Sorted : Intensity (according to sub mask)", va="center", ha="center", size=12)
+    plt.figtext(0.8,0.95,"Sorted : Louvain (according to sub mask)", va="center", ha="center", size=12)
     plt.tight_layout()
     plt.savefig('{}/hyp_{}.png'.format(results_dir, hyp), dpi=300)
+    plt.close('all')
+
+
+# organized + raw matrices
+hypnums = [1, 2, 5, 6, 7, 8, 9]
+for hyp in hypnums:
+    print(hyp)
+    correlation_matrices = glob.glob('{}/temp/Q_*_hyp{}.npy'.format(results_dir, hyp))
+    correlation_matrices.sort()
+
+    # load reference matrix (correlation matrix with participant mask) for similarity computation
+    matrix_reference_path = '{}/temp/Q_mask_99_hyp{}.npy'.format(results_dir, hyp)
+    matrix_reference = numpy.load(matrix_reference_path)
+    # no need to iterate over the matrix used as reference
+    correlation_matrices.remove(matrix_reference_path) 
+
+    f, axs = plt.subplots(4, 2, figsize=(5, 12))  
+    for ind, matrice in enumerate(correlation_matrices):
+        matrix = numpy.load(matrice)
+        if ind < 4:
+            row = ind
+            col = 0
+        else:
+            row = ind - 4
+            col = 1
+        matrix = numpy.load(matrice)
+        # similarity_matrix = sklearn.metrics.pairwise.cosine_similarity(matrix, matrix_reference)
+        similarity_matrix = matrix - matrix_reference
+        # Frobenius Norm => (Sum(abs(value)**2))**1/2
+        Fro = numpy.linalg.norm((matrix - matrix_reference), ord='fro')
+        # L1 Norm // manhatan distance => max(sum(abs(x), axis=0))
+        L1 = numpy.linalg.norm((matrix - matrix_reference), ord=1)
+        # L2 Norm // euclidian distance => 2-norm(largest sing. value)
+        L2 = numpy.linalg.norm((matrix - matrix_reference), ord=2)
+
+        seaborn.heatmap(similarity_matrix, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col], cbar_kws={'shrink': 0.2})
+        if matrice.split('/')[-1] == "Q_narps_mask_hyp{}.npy".format(hyp):
+            name_roi = "Narps sign mask"
+        else:
+            name_roi = matrice.split('/')[-1][2:-18]
+
+        title = (name_roi 
+                + '\n Mean corr =' + str(numpy.round(numpy.mean(similarity_matrix), 2)) 
+                + '\n Fro norm = {}'.format(numpy.round(Fro, 2))
+                + '\n L1 norm = {}'.format(numpy.round(L1, 2))
+                + '\n L2 norm = {}'.format(numpy.round(L2, 2)))
+        axs[row, col].set_title(title, fontsize=8)
+    axs[3, 1].axis('off') # get rid of matrice using mask from narps (it's empty)
+    if hyp == 9:
+        axs[2, 1].axis('off') # get rid of matrice using mask from narps (it's empty)
+    plt.suptitle('hyp {} : similarity matrix with sub mask'.format(hyp))
+    plt.tight_layout()
+    plt.savefig('{}/hyp_{}_similarity.png'.format(results_dir, hyp), dpi=300)
     plt.close('all')
 
 
