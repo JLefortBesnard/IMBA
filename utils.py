@@ -8,6 +8,7 @@ from math import log
 import scipy
 from os.path import join as opj
 import sklearn.metrics
+import pandas
 
 #######################################
 # UTILS
@@ -238,55 +239,75 @@ def tau(matrix: numpy.ndarray) -> float:
 # META ANALYSIS MODELING
 #######################################
 
-def meta_analyse_FFX(deltas: numpy.ndarray, deltas_var: numpy.ndarray) -> numpy.ndarray:
+def meta_analyse_FFX(matrix_betas: numpy.ndarray, si2: numpy.ndarray) -> numpy.ndarray:
     """
-    Compute final statmap as sum(Bi/si2)/sqrt(sum(1/si2))
+    Compute final T map as sum(Bi/si2)/sqrt(sum(1/si2))
+    with si2 (variance of contrast estimate for study i) 
+    being assumed to be equal to between study variance tau2
 
     Parameters
     ---------
-    deltas : numpy.ndarray
-        Vector of meta-analytic parameters
-    deltas_var : numpy.ndarray
-        Vector of meta-analytic parameters variance
+    matrix_betas : numpy.ndarray
+        matrix of generated beta values shape K,J
+    si2 : numpy.ndarray
+        vector of shape J
+
     Returns
     -------
-    numpy.ndarray : Vector of meta-analytic statistics for inference
+    vector : numpy.ndarray
+        Vector of meta-analytic statistics for inference
     """
-    return deltas/deltas_var/numpy.sqrt(1/deltas_var)
+    top = numpy.sum(numpy.divide(matrix_betas, si2), axis=0) # vector shape J
+    down = numpy.sqrt(numpy.sum(1/si2, axis=0)) # vector shape J
+    return top/down
 
-
-def meta_analyse_MFX(deltas: numpy.ndarray, deltas_var: numpy.ndarray) -> numpy.ndarray:
+def meta_analyse_MFX(matrix_betas: numpy.ndarray, si2: numpy.ndarray, tau2: numpy.ndarray) -> numpy.ndarray:
     """
     Compute final statmap as sum(ki*Bi)/sqrt(sum(Ki)) with ki = 1/(tau2 + si2)
+    with si2 (variance of contrast estimate for study i) 
+    being assumed to be equal to between study variance tau2
 
     Parameters
     ---------
-    deltas : numpy.ndarray
-        Vector of meta-analytic parameters
-    deltas_var : numpy.ndarray
-        Vector of meta-analytic parameters variance
+    matrix_betas : numpy.ndarray
+        matrix of generated beta values shape K,J
+    si2 : numpy.ndarray
+        vector of shape J
+    tau2 : numpy.ndarray
+        vector of shape J
+
     Returns
     -------
-    numpy.ndarray : Vector of meta-analytic statistics for inference
+    vector : numpy.ndarray
+        Vector of meta-analytic statistics for inference
     """
-    return deltas*1/deltas_var/numpy.sqrt(1/deltas_var)
+    k = 1/(si2 + tau2) # matrix of shape K,J
+    top = numpy.sum(numpy.multiply(matrix_betas,k), axis=0) # vector
+    down = numpy.sqrt(numpy.sum(k, axis=0)) # vector of shape J
+    return top/down
 
 
-def meta_analyse_RFX(deltas: numpy.ndarray, deltas_var: numpy.ndarray) -> numpy.ndarray:
+def meta_analyse_RFX(matrix_betas: numpy.ndarray, sigma2: numpy.ndarray) -> numpy.ndarray:
     """
     Compute final statmap as sum(Bi/sqrt(k))/(tau2+s2)
+    with si2 (variance of contrast estimate for study i) 
+    being assumed to be equal to between study variance tau2
 
     Parameters
     ---------
-    deltas : numpy.ndarray
-        Vector of meta-analytic parameters
-    deltas_var : numpy.ndarray
-        Vector of meta-analytic parameters variance
+    matrix_betas : numpy.ndarray
+        matrix of generated beta values shape K,J
+    sigma2 : numpy.ndarray
+        unbiased sample variance of shape J
+
     Returns
     -------
-    numpy.ndarray : Vector of meta-analytic statistics for inference
+    vector : numpy.ndarray
+        Vector of meta-analytic statistics for inference
     """
-    return deltas/numpy.sqrt(deltas.__len__())/deltas_var
+    K = matrix_betas.shape[0] # 20
+    top = numpy.sum(numpy.divide(matrix_betas, numpy.sqrt(K)), axis=0) # vector
+    return top/sigma2
 
 
 def meta_analyse_Fisher(matrix_p_values: numpy.ndarray) -> numpy.ndarray:
@@ -300,125 +321,177 @@ def meta_analyse_Fisher(matrix_p_values: numpy.ndarray) -> numpy.ndarray:
 
 
 def meta_analyse_Stouffer(matrix_z_values: numpy.ndarray) -> numpy.ndarray:
-    k = matrix_z_values.shape[1]
-    return numpy.sqrt(k)*1/k*matrix_z_values.sum(axis=0) # team wise
+    K = matrix_z_values.shape[0] # 20
+    return numpy.sqrt(K)*1/K*matrix_z_values.sum(axis=0) # team wise
 
 
 
 # PLOTTING
 #######################################
-def plot_generated_data(title: str, matrix_betas: numpy.ndarray, results_dir: str):
-    # add a plot if TAU values are availables
+def plot_generated_data(data_generated: dict):
+    print("Plotting generated data")
+    f, axs = plt.subplots(3, 4, figsize=(20, 8)) 
+    for index, title in enumerate(data_generated.keys()):
+        matrix_betas = data_generated[title]
+        mean = numpy.round(numpy.mean(matrix_betas), 2)
+        var = numpy.round(numpy.var(matrix_betas), 2)
+        seaborn.heatmap(matrix_betas[:, :50], center=0, vmin=matrix_betas.min(), vmax=matrix_betas.max(), cmap='coolwarm', ax=axs[0, index],cbar_kws={'shrink': 0.5})
+        axs[0, index].title.set_text("simulation {}\nGenerated betas\nmean={}, var={}".format(index, mean, var))
+        axs[0, index].set_xlabel("J voxels")
+        axs[0, index].set_ylabel("K teams")
 
-    f = plt.subplots(figsize=(10, 10)) 
-    
-    #########
-    ### Column 0
-    #########
+        corr_mat = numpy.corrcoef(matrix_betas.T)
+        seaborn.heatmap(corr_mat[:50,:50], vmin=0, vmax=1, cmap='Reds', square=True, ax=axs[1, index],cbar_kws={'shrink': 0.3})
+        axs[1, index].title.set_text("Spatial corr matrix ({})".format(numpy.round(corr_mat.mean(), 2)))
+        axs[1, index].set_ylabel("J voxels")
+        axs[1, index].set_xlabel('J voxels')
 
-    # display generated data
-    ax0 = plt.subplot2grid((6, 2), (0, 0), colspan=1, rowspan=2)
-    seaborn.heatmap(matrix_betas[:, :50], center=0, vmin=matrix_betas.min(), vmax=matrix_betas.max(), cmap='coolwarm', ax=ax0,cbar_kws={'shrink': 0.5})
-    ax0.title.set_text("Generated betas")
-    ax0.set_ylabel("K teams")
-    ax0.set_xlabel('J Voxels')
-
-    # display inter-pipeline mean
-    ax1 = plt.subplot2grid((6, 2), (2, 0), colspan=1, rowspan=1)
-    seaborn.heatmap(numpy.mean(matrix_betas, 0).reshape(1, -1)[:, :50], center=0, vmin=numpy.mean(matrix_betas, 0).min(), vmax=numpy.mean(matrix_betas, 0).max(), cmap='coolwarm', square=True, ax=ax1, cbar_kws={'shrink': 0.3})
-    ax1.set_ylabel("mean")
-    ax1.set_xlabel('J Voxels')
-    ax1.title.set_text("inter-pipeline mean ({})".format(numpy.round(numpy.mean(matrix_betas), 2)))
-
-    # display inter-pipeline variance
-    ax2 = plt.subplot2grid((6, 2), (3, 0), colspan=1, rowspan=1)
-    seaborn.heatmap(numpy.var(matrix_betas, 0).reshape(1, -1)[:, :50], vmin=0, vmax=numpy.var(matrix_betas, 0).max(), cmap='Reds', square=True, ax=ax2, cbar_kws={'shrink': 0.3})
-    ax2.set_ylabel("var")
-    ax2.set_xlabel('J Voxels')
-    ax2.title.set_text("inter-pipeline variance ({})".format(numpy.round(numpy.var(matrix_betas), 2)))
-
-
-    # display spatial mean
-    ax3 = plt.subplot2grid((6, 2), (4, 0), colspan=1, rowspan=1)
-    seaborn.heatmap(numpy.mean(matrix_betas, 1).reshape(1, -1), center=0, vmin=numpy.mean(matrix_betas, 1).min(), vmax=numpy.mean(matrix_betas, 1).max(), cmap='coolwarm', square=True, ax=ax3, cbar_kws={'shrink': 0.3})
-    ax3.set_ylabel("mean")
-    ax3.set_xlabel('K teams')
-    ax3.title.set_text("spatial mean")
-    
-    # display spatial variance
-    ax4 = plt.subplot2grid((6, 2), (5, 0), colspan=1, rowspan=1)
-    seaborn.heatmap(numpy.var(matrix_betas, 1).reshape(1, -1), vmin=0, vmax=numpy.var(matrix_betas, 1).max(), cmap='Reds', square=True, ax=ax4, cbar_kws={'shrink': 0.3})
-    ax4.set_ylabel("var")
-    ax4.set_xlabel('K teams')
-    ax4.title.set_text("Spatial variance")
-
-    #########
-    ### Column 1
-    #########
-
-    # display correlation matrix between team
-    ax5 = plt.subplot2grid((6, 2), (0, 1), colspan=1, rowspan=2)
-    corr_mat = numpy.corrcoef(matrix_betas)
-    seaborn.heatmap(corr_mat, vmin=0, vmax=1, cmap='Reds', square=True, ax=ax5,cbar_kws={'shrink': 0.3})
-    ax5.title.set_text("Q0 matrix ({})".format(numpy.round(corr_mat.mean(), 2)))
-    ax5.set_ylabel("K teams")
-    ax5.set_xlabel('K teams')
-
-    # display correlation matrix between voxel (spatial correlation)
-    ax6 = plt.subplot2grid((6, 2), (2, 1), colspan=1, rowspan=2)
-    corr_mat = numpy.corrcoef(matrix_betas.T)
-    # seaborn cannot plot 20000 values... thus limit to 100
-    seaborn.heatmap(corr_mat[:50,:50], vmin=0, vmax=1, cmap='Reds', square=True, ax=ax6,cbar_kws={'shrink': 0.3})
-    ax6.title.set_text("Spatial correlation matrix ({})".format(numpy.round(corr_mat.mean(), 2)))
-    ax6.set_ylabel("J Voxels")
-    ax6.set_xlabel('J Voxels')
+        corr_mat = numpy.corrcoef(matrix_betas)
+        seaborn.heatmap(corr_mat, vmin=0, vmax=1, cmap='Reds', square=True, ax=axs[2, index],cbar_kws={'shrink': 0.3})
+        axs[2, index].title.set_text("Q0 matrix ({})".format(numpy.round(corr_mat.mean(), 2)))
+        axs[2, index].set_ylabel("K teams")
+        axs[2, index].set_xlabel('K teams')
 
     plt.suptitle('{} : information (first 50 voxels)'.format(title))
     plt.tight_layout()
-    plt.savefig(opj(results_dir, "{}_info.png".format(title)))
+    plt.savefig("results_simulations/generated_data_info.png")
     plt.close('all')
 
 
-def plot_results(title: str, matrix_betas: numpy.ndarray, deltas: numpy.ndarray, deltas_var: numpy.ndarray, T_map: numpy.ndarray, W: numpy.ndarray, results_dir: str):
-    # add a plot if TAU values are availables
 
-    f, axs = plt.subplots(6, figsize=(5, 8)) 
-        
-    # display generated data
-    seaborn.heatmap(matrix_betas[:, :50], center=0, vmin=-3, vmax=3, cmap='coolwarm', ax=axs[0],cbar_kws={'shrink': 0.5})
-    axs[0].title.set_text("Generated betas")
-    axs[0].set_ylabel("K teams")
-    axs[0].set_xlabel('J Voxels')
+def plot_simulation_results(simulation_nb, results):
+    print("Plotting results for simulation {}".format(simulation_nb))
+    matrix_betas = results['data']['matrix_betas']
+    matrix_z = results['data']['matrix_z']
+    matrix_p = results['data']['matrix_p']
+    p_theoretical = results['Stouffer']['p_values'].copy()
+    p_theoretical.sort()
+    f, axs = plt.subplots(4, 5, figsize=(20, 8)) 
+    for index, title in enumerate(['Fisher', 'Stouffer', 'FFX', 'MFX', 'RFX']):
+        if title == 'Fisher':
+            vector_fisher = results[title]['vector_fisher'].copy()
+            ratio_significance = results[title]['ratio_significance']
+            verdict = results[title]['verdict']
 
-    # display mean voxel value accross team
-    seaborn.heatmap(matrix_betas.mean(axis=0).reshape(1, -1)[:, :50], center=0, vmin=deltas.min(), vmax=deltas.max(), cmap='coolwarm', square=True, ax=axs[1],cbar_kws={'shrink': 0.3})
-    axs[1].set_ylabel("Mean")
- 
-    # display Deltas and Deltas variance
-    seaborn.heatmap(deltas.reshape(1, -1)[:, :50], center=0, vmax=deltas.max(), vmin=deltas.min(), cmap='coolwarm', square=True, ax=axs[2], cbar_kws={'shrink': 0.3})
-    axs[2].set_ylabel("Deltas")
-    seaborn.heatmap(deltas_var.reshape(1, -1)[:, :50], center=0, vmax=deltas_var.max(), vmin=0, cmap='coolwarm', square=True, ax=axs[3], cbar_kws={'shrink': 0.3})
-    axs[3].set_ylabel("Variance deltas")
+            axs[0, index].axis('off')
+            axs[0, index].title.set_text(" {}\n ".format(title))
+            axs[1, index].axis('off')
 
+            vector_fisher_sorted = vector_fisher.copy()
+            vector_fisher_sorted.sort()
+            axs[2, index].hist(vector_fisher_sorted, bins=100, color='y')
+            axs[2, index].title.set_text("X2 values distribution")
+            axs[2, index].set_ylabel("frequency")
+            axs[2, index].set_xlabel("X2 value")
+            axs[2, index].axvline(55.758, ymin=0, color='black', linewidth=0.5, linestyle='--')
 
-    # display T map
-    seaborn.heatmap(T_map.reshape(1, -1)[:, :50], center=0, vmin=T_map.min(), vmax=T_map.max(), cmap='coolwarm', square=True, ax=axs[4], cbar_kws={'shrink': 0.3})
-    axs[4].set_ylabel("T stat")
+            p_obs_p_cum = vector_fisher_sorted - vector_fisher_sorted
+            # pobs-pcum and pcum distribution
+            axs[3, index].plot(vector_fisher_sorted, p_obs_p_cum, color='y')
+            axs[3, index].title.set_text("p-plot")
+            axs[3, index].set_xlabel("cumulative X2")
+            axs[3, index].set_ylabel("observed X2 - cumulative X2")
+            axs[3, index].axvline(55.758, ymin=-1, color='black', linewidth=0.5, linestyle='--')
+            axs[3, index].axhline(0, color='black', linewidth=0.5, linestyle='--')
+            axs[3, index].set_xlim(0, 100)
+            axs[3, index].set_ylim(-0.5, 0.5)
+            axs[3, index].text(2, 0.25, 'ratio={}%, {}'.format(ratio_significance, verdict))
 
-    # display p_values
-    p_values = 1 - scipy.stats.norm.cdf(T_map)
-    seaborn.heatmap(p_values.reshape(1, -1)[:, :50], vmin=0, vmax=0.06, cmap='Reds_r', square=True, mask=p_values.reshape(1, -1)[:, :50] > 0.05, ax=axs[5], cbar_kws={'shrink': 0.3})
-    ratio = (p_values<=0.05).sum()/p_values.__len__()
-    lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
-    verdict = 0.05-lim <= ratio <= 0.05+lim
-    print(ratio, lim, verdict)
-    axs[5].title.set_text("sig p values, ratio={}, {}".format(numpy.round(ratio, 3), verdict))
-    axs[5].set_ylabel("p values")
+            plt.suptitle('{}'.format(title))
+            continue # next loop iteration
 
-    plt.suptitle('Results for {}'.format(title))
+        # else    
+        T_map = results[title]['T_map']
+        p_values = results[title]['p_values']
+        ratio_significance = results[title]['ratio_significance']
+        verdict = results[title]['verdict']
+
+        # display p over t disctribution
+        df_obs = pandas.DataFrame(data=numpy.array([p_values, T_map]).T, columns=["p_values", "T_values"])
+        df_cum = df_obs.sort_values(by=['p_values'])
+        # t and p distribution
+        axs[0, index].plot(df_cum['T_values'].values, df_cum['p_values'].values, color='tab:blue')
+        axs[0, index].title.set_text(" {}\np values of t statistics (1-tail)".format(title))
+        axs[0, index].set_xlabel("t statistics")
+        axs[0, index].set_ylabel("p values")
+        axs[0, index].set_xlim(0, 4)
+
+        axs[1, index].hist(df_cum['T_values'].values, bins=100, color='green')
+        axs[1, index].title.set_text("t statistics distribution")
+        axs[1, index].set_ylabel("frequency")
+        axs[1, index].set_xlabel("t value")
+
+        axs[2, index].hist(df_cum['p_values'].values, bins=100, color='y')
+        axs[2, index].title.set_text("p values distribution")
+        axs[2, index].set_ylabel("frequency")
+        axs[2, index].set_xlabel("p value")
+        axs[2, index].axvline(0.05, ymin=0, color='black', linewidth=0.5, linestyle='--')
+
+        p_obs_p_cum = df_cum['p_values'].values - p_theoretical
+        # pobs-pcum and pcum distribution
+        axs[3, index].plot(-numpy.log10(p_theoretical), p_obs_p_cum, color='y')
+        axs[3, index].title.set_text("p-plot")
+        axs[3, index].set_xlabel("-log10 cumulative p")
+        axs[3, index].set_ylabel("observed p - cumulative p")
+        axs[3, index].axvline(-numpy.log10(0.05), ymin=-1, color='black', linewidth=0.5, linestyle='--')
+        axs[3, index].axhline(0, color='black', linewidth=0.5, linestyle='--')
+        axs[3, index].set_xlim(0, 6)
+        axs[3, index].set_ylim(-0.5, 0.5)
+        axs[3, index].text(2, 0.25, 'ratio={}%, {}'.format(ratio_significance, verdict))
+    plt.suptitle('Simulation {}'.format(simulation_nb))
     plt.tight_layout()
-    plt.savefig(opj(results_dir, "{}_maps.png".format(title)))
+    plt.savefig("results_simulations/distributions_sim{}.png".format(simulation_nb))
     plt.close('all')
+
+    p_theoretical = results['intuitive_sol']['p_values'].copy()
+    p_theoretical.sort()
+    f, axs = plt.subplots(4, 5, figsize=(20, 8)) 
+    for index, title in enumerate(['intuitive_sol', 'consensus', 'samedata_consensus', 'samedata_FFX', 'samedata_RFX']):
+        # else    
+        T_map = results[title]['T_map']
+        p_values = results[title]['p_values']
+        ratio_significance = results[title]['ratio_significance']
+        verdict = results[title]['verdict']
+
+        # display p over t disctribution
+        df_obs = pandas.DataFrame(data=numpy.array([p_values, T_map]).T, columns=["p_values", "T_values"])
+        df_cum = df_obs.sort_values(by=['p_values'])
+        # t and p distribution
+        axs[0, index].plot(df_cum['T_values'].values, df_cum['p_values'].values, color='tab:blue')
+        axs[0, index].title.set_text(" {}\np values of t statistics (1-tail)".format(title))
+        axs[0, index].set_xlabel("t statistics")
+        axs[0, index].set_ylabel("p values")
+        axs[0, index].set_xlim(0, 4)
+
+        axs[1, index].hist(df_cum['T_values'].values, bins=100, color='green')
+        axs[1, index].title.set_text("t statistics distribution")
+        axs[1, index].set_ylabel("frequency")
+        axs[1, index].set_xlabel("t value")
+
+        axs[2, index].hist(df_cum['p_values'].values, bins=100, color='y')
+        axs[2, index].title.set_text("p values distribution")
+        axs[2, index].set_ylabel("frequency")
+        axs[2, index].set_xlabel("p value")
+
+        p_obs_p_cum = df_cum['p_values'].values - p_theoretical
+        # pobs-pcum and pcum distribution
+        axs[3, index].plot(-numpy.log10(p_theoretical), p_obs_p_cum, color='y')
+        axs[3, index].title.set_text("p-plot")
+        axs[3, index].set_xlabel("-log10 cumulative p")
+        axs[3, index].set_ylabel("observed p - cumulative p")
+        axs[3, index].axvline(-numpy.log10(0.05), ymin=-1, color='black', linewidth=0.5, linestyle='--')
+        axs[3, index].axhline(0, color='black', linewidth=0.5, linestyle='--')
+        axs[3, index].set_xlim(0, 6)
+        axs[3, index].set_ylim(-0.5, 0.5)
+        axs[3, index].text(2, 0.25, 'ratio={}%, {}'.format(ratio_significance, verdict))
+        plt.suptitle('{}'.format(title))
+    plt.suptitle('Simulation {}'.format(simulation_nb))
+    plt.tight_layout()
+    plt.savefig("results_simulations/distributions_samedata_sim{}.png".format(simulation_nb))
+    plt.close('all') 
+
+    print("Plotting done")
+
 
 
 
@@ -499,7 +572,18 @@ def display_matrices(results_dir, sim_number, corr):
     # organized + raw matrices
     correlation_matrices = glob.glob('{}/temp/Q_*_sim{}.npy'.format(results_dir, sim_number))
     correlation_matrices.sort()
-    f, axs = plt.subplots(4, 6, figsize=(15, 15))  
+
+    # put the participant mask at index 0 to fit louvain and sorting according
+    # to participant mask and not frontal mask (originaly at index 0)
+    new_order = [3, 0, 1, 2, 4, 5, 6]
+    correlation_matrices = [correlation_matrices[ind] for ind in new_order]
+
+    # load reference matrix (correlation matrix with participant mask) for similarity computation
+    matrix_reference_path = '{}/temp/Q_mask_99_sim{}.npy'.format(results_dir, sim_number)
+    matrix_reference = numpy.load(matrix_reference_path)
+
+
+    f, axs = plt.subplots(4, 8, figsize=(25, 15))  
     for ind, matrice in enumerate(correlation_matrices):
         matrix = numpy.load(matrice)
         if ind == 0:
@@ -513,76 +597,64 @@ def display_matrices(results_dir, sim_number, corr):
         else:
             row = ind - 4
             col = 1
-        seaborn.heatmap(matrix, center=0, vmax=0.8, vmin=-0.8, cmap='coolwarm', robust=True, square=True, ax=axs[row, col], cbar_kws={'shrink': 0.6})
-        seaborn.heatmap(matrix_organized, center=0, vmax=0.8, vmin=-0.8, cmap='coolwarm', robust=True, square=True, ax=axs[row, col+2], cbar_kws={'shrink': 0.6})
-        seaborn.heatmap(matrix_organized_louvain, center=0, vmax=0.8, vmin=-0.8, cmap='coolwarm', robust=True, square=True, ax=axs[row, col+4], cbar_kws={'shrink': 0.6})
+
         if matrice.split('/')[-1] == "Q_mask_99_sim{}.npy".format(sim_number):
             name_roi = "participant_mask"
-        elif matrice.split('/')[-1] == "Q_znarps_mask_sim{}.npy".format(sim_number):
-            name_roi = "Narps mask"
         else:
             name_roi = matrice.split('/')[-1][2:-18]
-        title = name_roi + ' ' + str(numpy.round(numpy.mean(numpy.load(matrice)), 3))
+        title = name_roi + ' ' + str(numpy.round(numpy.mean(numpy.load(matrice))*100, 1))
         title_organized = name_roi
+
+
+        if matrice != matrix_reference_path:
+            # similarity_matrix = sklearn.metrics.pairwise.cosine_similarity(matrix, matrix_reference)
+            similarity_matrix = matrix - matrix_reference
+            similarity_matrix_ratio = matrix/matrix.shape[0]**2 / matrix_reference/matrix.shape[0]**2
+            similarity_matrix_perc_diff = (matrix/matrix.shape[0]**2 - matrix_reference/matrix.shape[0]**2)/matrix_reference/matrix.shape[0]**2
+            # Frobenius Norm => (Sum(abs(value)**2))**1/2
+            Fro = numpy.linalg.norm(similarity_matrix, ord='fro')
+            Fro_div2 = numpy.linalg.norm(similarity_matrix/2, ord='fro')
+            Fro_ratio = numpy.linalg.norm(similarity_matrix_ratio, ord='fro')
+            Fro_perc_diff = numpy.linalg.norm(similarity_matrix_perc_diff, ord='fro')
+
+            title_similarity = (name_roi 
+                + '\n{}|{}|{}|{}'.format(numpy.round(Fro, 1), numpy.round(Fro_div2, 1), numpy.round(Fro_ratio, 1), numpy.round(Fro_perc_diff , 1)))
+            seaborn.heatmap(similarity_matrix, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col+6], cbar_kws={'shrink': 0.6})
+            axs[row, col+6].title.set_text(title_similarity)
+
+
+        seaborn.heatmap(matrix, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col], cbar_kws={'shrink': 0.6})
+        seaborn.heatmap(matrix_organized, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col+2], cbar_kws={'shrink': 0.6})
+        seaborn.heatmap(matrix_organized_louvain, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col+4], cbar_kws={'shrink': 0.6})
+
+
         axs[row, col].title.set_text(title)
         axs[row, col+2].title.set_text(title_organized)
         axs[row, col+4].title.set_text(title_organized)
-        axs[-1, 1].axis('off') # get rid of matrice using mask from narps (it's empty)
-        axs[-1, 3].axis('off') # get rid of matrice using mask from narps (it's empty)
-        axs[-1, 5].axis('off') # get rid of matrice using mask from narps (it's empty)
-    plt.suptitle('Simulation  {}'.format(sim_number))
-    # adjust the subplots, i.e. leave more space at the top to accomodate the additional titles
+    axs[0, 6].axis('off') # get rid of reference mask used for similarity matrix
+
+    axs[0, 6].text(0.1, 0.7, 'frobenius score as:') 
+    axs[0, 6].text(0.1, 0.6, '    a|b|c|d') 
+    axs[0, 6].text(0.1, 0.5, 'a: Qi -Qb') 
+    axs[0, 6].text(0.1, 0.4, 'b: (Qi-Qb)/2') 
+    axs[0, 6].text(0.1, 0.3, 'c: (Qi/K**2)/(Qb/K**2)') 
+    axs[0, 6].text(0.1, 0.2, 'd: ((Qi/K**2)-(Qb/K**2))/(Qb/K**2)') 
+
+    axs[-1, 5].axis('off') # get rid of matrice using mask from narps (it's empty)
+    axs[-1, 1].axis('off') # get rid of matrice using mask from narps (it's empty)
+    axs[-1, 3].axis('off') # get rid of matrice using mask from narps (it's empty)
+    axs[-1, 7].axis('off') # get rid of matrice using mask from narps (it's empty)
+
+    plt.suptitle('simutation  {}, corr {}'.format(sim_number, corr), size=16, fontweight='bold')
     f.subplots_adjust(top=0.78) 
-    plt.figtext(0.1,0.95,"Original", va="center", ha="center", size=12)
-    plt.figtext(0.5,0.95,"Sorted : Intensity", va="center", ha="center", size=12)
-    plt.figtext(0.8,0.95,"Sorted : Louvain", va="center", ha="center", size=12)
+    plt.figtext(0.1,0.95,"Original", va="center", ha="center", size=12, fontweight='bold')
+    plt.figtext(0.35,0.95,"Sorted : Intensity", va="center", ha="center", size=12, fontweight='bold')
+    plt.figtext(0.6,0.95,"Sorted : Louvain", va="center", ha="center", size=12, fontweight='bold')
+    plt.figtext(0.87,0.95,"Similarity matrix", va="center", ha="center", size=12, fontweight='bold')
+    line = plt.Line2D((.75,.75),(.1,.9), color="k", linewidth=3)
+    f.add_artist(line)
     plt.tight_layout()
     plt.savefig('{}/similation_{}_corr{}.png'.format(results_dir, sim_number, corr), dpi=300)
-    plt.close('all')
-
-
-def display_similarity_matrices(results_dir, sim_number, corr):
-    # organized + raw matrices
-    correlation_matrices = glob.glob('{}/temp/Q_*_sim{}.npy'.format(results_dir, sim_number))
-    correlation_matrices.sort()
-    # load reference matrix (correlation matrix with participant mask) for similarity computation
-    matrix_reference_path = '{}/temp/Q_mask_99_sim{}.npy'.format(results_dir, sim_number)
-    matrix_reference = numpy.load(matrix_reference_path)
-    # no need to iterate over the matrix used as reference
-    correlation_matrices.remove(matrix_reference_path) 
-
-    f, axs = plt.subplots(3, 2, figsize=(5, 10))
-    for ind, matrice in enumerate(correlation_matrices):
-        if ind < 3:
-            row = ind
-            col = 0
-        else:
-            row = ind - 3
-            col = 1
-        matrix = numpy.load(matrice)
-        # similarity_matrix = sklearn.metrics.pairwise.cosine_similarity(matrix, matrix_reference)
-        similarity_matrix = matrix - matrix_reference
-        # Frobenius Norm => (Sum(abs(value)**2))**1/2
-        Fro = numpy.linalg.norm((matrix - matrix_reference), ord='fro')
-        # L1 Norm // manhatan distance => max(sum(abs(x), axis=0))
-        L1 = numpy.linalg.norm((matrix - matrix_reference), ord=1)
-        # L2 Norm // euclidian distance => 2-norm(largest sing. value)
-        L2 = numpy.linalg.norm((matrix - matrix_reference), ord=2)
-        seaborn.heatmap(similarity_matrix, center=0, vmax=0.04, vmin=-0.04, cmap='coolwarm', robust=True, square=True, ax=axs[row, col], cbar_kws={'shrink': 0.2})
-        if matrice.split('/')[-1] == "Q_znarps_mask_sim{}.npy".format(sim_number):
-            name_roi = "Narps mask"
-        else:
-            name_roi = matrice.split('/')[-1][2:-18]
-        title = (name_roi 
-                + '\n Mean corr =' + str(numpy.round(numpy.mean(similarity_matrix), 2)) 
-                + '\n Fro norm = {}'.format(numpy.round(Fro, 2))
-                + '\n L1 norm = {}'.format(numpy.round(L1, 2))
-                + '\n L2 norm = {}'.format(numpy.round(L2, 2)))
-        axs[row, col].set_title(title, fontsize=8)
-
-    plt.suptitle('Simulation  {} : similarity matrix'.format(sim_number))
-    plt.tight_layout()
-    plt.savefig('{}/similation_{}_corr{}_similarity.png'.format(results_dir, sim_number, corr), dpi=300)
     plt.close('all')
 
 

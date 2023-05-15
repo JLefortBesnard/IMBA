@@ -114,7 +114,7 @@ for sim_number, Zmaps in enumerate([Zmaps_sim0, Zmaps_sim1, Zmaps_sim2, Zmaps_si
     print('---')
     print("Computing and saving simulation ", sim_number)
     utils.display_matrices(results_dir, sim_number, corr)
-    utils.display_similarity_matrices(results_dir, sim_number, corr)
+
 
 
 import shutil

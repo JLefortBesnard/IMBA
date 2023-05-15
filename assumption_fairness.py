@@ -233,7 +233,6 @@ for hyp in hypnums:
 ##############
 # Plot Q matrices per hypothesis 
 ##############
-
 # organized + raw matrices
 hypnums = [1, 2, 5, 6, 7, 8, 9]
 for hyp in hypnums:
@@ -245,7 +244,12 @@ for hyp in hypnums:
     new_order = [3, 0, 1, 2, 4, 5, 6] if hyp==9 else [3, 0, 1, 2, 4, 5, 6, 7]
     correlation_matrices = [correlation_matrices[ind] for ind in new_order]
 
-    f, axs = plt.subplots(4, 6, figsize=(15, 15))  
+    # load reference matrix (correlation matrix with participant mask) for similarity computation
+    matrix_reference_path = '{}/temp/Q_mask_99_hyp{}.npy'.format(results_dir, hyp)
+    matrix_reference = numpy.load(matrix_reference_path)
+
+
+    f, axs = plt.subplots(4, 8, figsize=(25, 15))  
     for ind, matrice in enumerate(correlation_matrices):
         matrix = numpy.load(matrice)
         if ind == 0:
@@ -259,9 +263,7 @@ for hyp in hypnums:
         else:
             row = ind - 4
             col = 1
-        seaborn.heatmap(matrix, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col], cbar_kws={'shrink': 0.6})
-        seaborn.heatmap(matrix_organized, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col+2], cbar_kws={'shrink': 0.6})
-        seaborn.heatmap(matrix_organized_louvain, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col+4], cbar_kws={'shrink': 0.6})
+
         if matrice.split('/')[-1] == "Q_mask_99_hyp{}.npy".format(hyp):
             name_roi = "participant_mask"
         elif matrice.split('/')[-1] == "Q_narps_mask_hyp{}.npy".format(hyp):
@@ -270,13 +272,48 @@ for hyp in hypnums:
             name_roi = matrice.split('/')[-1][2:-18]
         title = name_roi + ' ' + str(numpy.round(numpy.mean(numpy.load(matrice))*100, 1))
         title_organized = name_roi
+
+
+        if matrice != matrix_reference_path:
+            # similarity_matrix = sklearn.metrics.pairwise.cosine_similarity(matrix, matrix_reference)
+            similarity_matrix = matrix - matrix_reference
+            similarity_matrix_ratio = matrix/matrix.shape[0]**2 / matrix_reference/matrix.shape[0]**2
+            similarity_matrix_perc_diff = (matrix/matrix.shape[0]**2 - matrix_reference/matrix.shape[0]**2)/matrix_reference/matrix.shape[0]**2
+            # Frobenius Norm => (Sum(abs(value)**2))**1/2
+            Fro = numpy.linalg.norm(similarity_matrix, ord='fro')
+            Fro_div2 = numpy.linalg.norm(similarity_matrix/2, ord='fro')
+            Fro_ratio = numpy.linalg.norm(similarity_matrix_ratio, ord='fro')
+            Fro_perc_diff = numpy.linalg.norm(similarity_matrix_perc_diff, ord='fro')
+
+            title_similarity = (name_roi 
+                + '\n{}|{}|{}|{}'.format(numpy.round(Fro, 1), numpy.round(Fro_div2, 1), numpy.round(Fro_ratio, 1), numpy.round(Fro_perc_diff , 1)))
+            seaborn.heatmap(similarity_matrix, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col+6], cbar_kws={'shrink': 0.6})
+            axs[row, col+6].title.set_text(title_similarity)
+
+
+        seaborn.heatmap(matrix, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col], cbar_kws={'shrink': 0.6})
+        seaborn.heatmap(matrix_organized, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col+2], cbar_kws={'shrink': 0.6})
+        seaborn.heatmap(matrix_organized_louvain, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col+4], cbar_kws={'shrink': 0.6})
+
+
         axs[row, col].title.set_text(title)
         axs[row, col+2].title.set_text(title_organized)
         axs[row, col+4].title.set_text(title_organized)
+    axs[0, 6].axis('off') # get rid of reference mask used for similarity matrix
+
+    axs[0, 6].text(0.1, 0.7, 'frobenius score as:') 
+    axs[0, 6].text(0.1, 0.6, '    a|b|c|d') 
+    axs[0, 6].text(0.1, 0.5, 'a: Qi -Qb') 
+    axs[0, 6].text(0.1, 0.4, 'b: (Qi-Qb)/2') 
+    axs[0, 6].text(0.1, 0.3, 'c: (Qi/K**2)/(Qb/K**2)') 
+    axs[0, 6].text(0.1, 0.2, 'd: ((Qi/K**2)-(Qb/K**2))/(Qb/K**2)') 
+
+
     if hyp == 9:
         axs[-1, 5].axis('off') # get rid of matrice using mask from narps (it's empty)
         axs[-1, 1].axis('off') # get rid of matrice using mask from narps (it's empty)
         axs[-1, 3].axis('off') # get rid of matrice using mask from narps (it's empty)
+        axs[-1, 7].axis('off') # get rid of matrice using mask from narps (it's empty)
     else:
         mask_narps = "/home/jlefortb/IMBA/masking/hyp{}_narps_mask.nii.gz".format(hyp)
         # add nb sign voxel in title for narps sign mask 
@@ -284,67 +321,19 @@ for hyp in hypnums:
                         + '\n nb_sign_voxel='
                         + '\n' + str(nibabel.load(mask_narps).get_fdata().sum()))
         axs[0, 1].title.set_text(title_nb_voxel)
-    plt.suptitle('hyp  {}'.format(hyp))
+
+    plt.suptitle('hyp  {}'.format(hyp), size=16, fontweight='bold')
     f.subplots_adjust(top=0.78) 
-    plt.figtext(0.1,0.95,"Original", va="center", ha="center", size=12)
-    plt.figtext(0.5,0.95,"Sorted : Intensity (according to sub mask)", va="center", ha="center", size=12)
-    plt.figtext(0.8,0.95,"Sorted : Louvain (according to sub mask)", va="center", ha="center", size=12)
+    plt.figtext(0.1,0.95,"Original", va="center", ha="center", size=12, fontweight='bold')
+    plt.figtext(0.35,0.95,"Sorted : Intensity", va="center", ha="center", size=12, fontweight='bold')
+    plt.figtext(0.6,0.95,"Sorted : Louvain", va="center", ha="center", size=12, fontweight='bold')
+    plt.figtext(0.87,0.95,"Similarity matrix", va="center", ha="center", size=12, fontweight='bold')
+    line = plt.Line2D((.75,.75),(.1,.9), color="k", linewidth=3)
+    f.add_artist(line)
     plt.tight_layout()
     plt.savefig('{}/hyp_{}.png'.format(results_dir, hyp), dpi=300)
     plt.close('all')
 
-
-# organized + raw matrices
-hypnums = [1, 2, 5, 6, 7, 8, 9]
-for hyp in hypnums:
-    print(hyp)
-    correlation_matrices = glob.glob('{}/temp/Q_*_hyp{}.npy'.format(results_dir, hyp))
-    correlation_matrices.sort()
-
-    # load reference matrix (correlation matrix with participant mask) for similarity computation
-    matrix_reference_path = '{}/temp/Q_mask_99_hyp{}.npy'.format(results_dir, hyp)
-    matrix_reference = numpy.load(matrix_reference_path)
-    # no need to iterate over the matrix used as reference
-    correlation_matrices.remove(matrix_reference_path) 
-
-    f, axs = plt.subplots(4, 2, figsize=(5, 12))  
-    for ind, matrice in enumerate(correlation_matrices):
-        matrix = numpy.load(matrice)
-        if ind < 4:
-            row = ind
-            col = 0
-        else:
-            row = ind - 4
-            col = 1
-        matrix = numpy.load(matrice)
-        # similarity_matrix = sklearn.metrics.pairwise.cosine_similarity(matrix, matrix_reference)
-        similarity_matrix = matrix - matrix_reference
-        # Frobenius Norm => (Sum(abs(value)**2))**1/2
-        Fro = numpy.linalg.norm((matrix - matrix_reference), ord='fro')
-        # L1 Norm // manhatan distance => max(sum(abs(x), axis=0))
-        L1 = numpy.linalg.norm((matrix - matrix_reference), ord=1)
-        # L2 Norm // euclidian distance => 2-norm(largest sing. value)
-        L2 = numpy.linalg.norm((matrix - matrix_reference), ord=2)
-
-        seaborn.heatmap(similarity_matrix, center=0, cmap='coolwarm', robust=True, square=True, ax=axs[row, col], cbar_kws={'shrink': 0.2})
-        if matrice.split('/')[-1] == "Q_narps_mask_hyp{}.npy".format(hyp):
-            name_roi = "Narps sign mask"
-        else:
-            name_roi = matrice.split('/')[-1][2:-18]
-
-        title = (name_roi 
-                + '\n Mean corr =' + str(numpy.round(numpy.mean(similarity_matrix), 2)) 
-                + '\n Fro norm = {}'.format(numpy.round(Fro, 2))
-                + '\n L1 norm = {}'.format(numpy.round(L1, 2))
-                + '\n L2 norm = {}'.format(numpy.round(L2, 2)))
-        axs[row, col].set_title(title, fontsize=8)
-    axs[3, 1].axis('off') # get rid of matrice using mask from narps (it's empty)
-    if hyp == 9:
-        axs[2, 1].axis('off') # get rid of matrice using mask from narps (it's empty)
-    plt.suptitle('hyp {} : similarity matrix with sub mask'.format(hyp))
-    plt.tight_layout()
-    plt.savefig('{}/hyp_{}_similarity.png'.format(results_dir, hyp), dpi=300)
-    plt.close('all')
 
 
 files_to_del = glob.glob("{}/temp/*.npy".format(results_dir))

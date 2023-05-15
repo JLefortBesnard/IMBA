@@ -4,6 +4,12 @@ import os
 import MetaAnalysesAlgorithms
 import utils
 
+
+from scipy.stats import norm
+import seaborn
+import matplotlib.pyplot as plt
+import pandas
+
 importlib.reload(utils) # reupdate imported codes, useful for debugging
 importlib.reload(MetaAnalysesAlgorithms)
 
@@ -21,6 +27,7 @@ mu1 = 2 # should be at least 1
 
 corr = 0.8 # correlation accross teams
 
+data_generated = {} # for plotting 
 
 print("RUNNING SIMULATION 0")
 #######################################
@@ -28,17 +35,19 @@ print("RUNNING SIMULATION 0")
 # => any sensible method should work fine.
 # generate iid matrix of dimension K columns, J rows
 #######################################
+
 # generate sample 
 rng = numpy.random.default_rng()
 matrix_betas = mu + sigma * rng.standard_normal(size=(K,J))
-
+data_generated["sim0"] = matrix_betas
 # results dir
-results_dir = "results_simulations/simulation0"
+results_dir = "results_simulations"
 if not os.path.exists(results_dir):
     os.mkdir(results_dir)
 # launch analyses
-utils.plot_generated_data("simulation0", matrix_betas, results_dir)
-MetaAnalysesAlgorithms.run_all_MA_algorithms(results_dir, matrix_betas)
+simulation_nb = 0
+results_simulation_0 = MetaAnalysesAlgorithms.run_all_MA_algorithms(matrix_betas, simulation_nb)
+utils.plot_simulation_results(simulation_nb, results_simulation_0)
 
 
 print("RUNNING SIMULATION 1")
@@ -48,13 +57,11 @@ print("RUNNING SIMULATION 1")
 #######################################
 # generate betas
 matrix_betas = utils.null_data(J=J, K=K, covar=corr)
-# results dir
-results_dir = "results_simulations/simulation1"
-if not os.path.exists(results_dir):
-    os.mkdir(results_dir)
+data_generated["sim1"] = matrix_betas
 # launch analyses
-MetaAnalysesAlgorithms.run_all_MA_algorithms(results_dir, matrix_betas)
-utils.plot_generated_data("simulation1", matrix_betas, results_dir)
+simulation_nb = 1
+results_simulation_1 = MetaAnalysesAlgorithms.run_all_MA_algorithms(matrix_betas, simulation_nb)
+utils.plot_simulation_results(simulation_nb, results_simulation_1)
 
 print("RUNNING SIMULATION 2")
 #######################################
@@ -63,13 +70,11 @@ print("RUNNING SIMULATION 2")
 #######################################
 # generate betas
 matrix_betas = utils.non_null_homogeneous_data(J=J, K=K, covar=corr, mean=mu1)
-# results dir
-results_dir = "results_simulations/simulation2"
-if not os.path.exists(results_dir):
-    os.mkdir(results_dir)
+data_generated["sim2"] = matrix_betas
 # launch analyses
-MetaAnalysesAlgorithms.run_all_MA_algorithms(results_dir, matrix_betas)
-utils.plot_generated_data("simulation2", matrix_betas, results_dir)
+simulation_nb = 2
+results_simulation_2 = MetaAnalysesAlgorithms.run_all_MA_algorithms(matrix_betas, simulation_nb)
+utils.plot_simulation_results(simulation_nb, results_simulation_2)
 
 
 print("RUNNING SIMULATION 3")
@@ -79,12 +84,11 @@ print("RUNNING SIMULATION 3")
 #######################################
 # generate betas
 matrix_betas = utils.non_null_data_heterogeneous(J=J, K=K, covar=corr, mean=mu1)
-# results dir
-results_dir = "results_simulations/simulation3"
-if not os.path.exists(results_dir):
-    os.mkdir(results_dir)
+data_generated["sim3"] = matrix_betas
 # launch analyses
-MetaAnalysesAlgorithms.run_all_MA_algorithms(results_dir, matrix_betas)
-utils.plot_generated_data("simulation3", matrix_betas, results_dir)
+simulation_nb = 3
+results_simulation_3 = MetaAnalysesAlgorithms.run_all_MA_algorithms(matrix_betas, simulation_nb)
+utils.plot_simulation_results(simulation_nb, results_simulation_3)
 
 
+utils.plot_generated_data(data_generated)

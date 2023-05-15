@@ -10,7 +10,9 @@ from sklearn.preprocessing import (StandardScaler, MinMaxScaler)
 importlib.reload(utils) # reupdate imported codes, useful for debugging
 
 
-def run_all_MA_algorithms(results_dir, matrix_betas):
+def run_all_MA_algorithms(matrix_betas, simulation_nb):
+
+
      K = matrix_betas.shape[0]
      J = matrix_betas.shape[1]
 
@@ -18,14 +20,11 @@ def run_all_MA_algorithms(results_dir, matrix_betas):
      matrix_z = StandardScaler().fit_transform(matrix_betas.T).T # scaling team wise
      matrix_p = 1 - scipy.stats.norm.cdf(matrix_z)
 
-     # generate p values matrix with from left to right less and less significant p values
-     # add 5 voxels significant in every studies
-     matrix_p_generated = []
-     for i in range(1, J+1):
-         loc = (i*0.003 + 0.005)
-         matrix_p_generated.append(numpy.abs(numpy.random.default_rng().normal(loc=loc, scale=0.02, size=(K))))
-     matrix_p_generated = numpy.array(matrix_p_generated).T
-     matrix_p_generated.sort(axis=0)
+     # store results for latter plotting
+     results_simulation = {} 
+     results_simulation['data'] = {'matrix_betas':matrix_betas, 'matrix_z':matrix_z, 'matrix_p':matrix_p}
+
+
 
      ###############################################################################
      # PART. 1
@@ -36,19 +35,31 @@ def run_all_MA_algorithms(results_dir, matrix_betas):
      # could be repeated and a new datasets sampled from the population).
      ###############################################################################
 
-
      ##################
      ### FFX GLM
      ##################
      # INPUTS ARE BETA VALUES !
      # final stats is sum(Bi/si2)/sqrt(sum(1/si2))
 
-     # W = s**2
-     W_FFX = numpy.var(matrix_betas, axis=0) # variance of the contrast estimate for each voxel
-     deltas, deltas_var = utils.compute_deltas(matrix_betas, W_FFX, GLM='FFX')
-     # T threshold at k-1 = 2.262 (should be (sum_at_k ni-1)-1)
-     T_map = utils.meta_analyse_FFX(deltas, deltas_var)
-     utils.plot_results('1.FFX', matrix_betas, deltas, deltas_var, T_map, W_FFX, results_dir)
+     # si2 = variance of contrast estimate for study i
+     # being assumed to be equal to between study variance (tau2)
+     si2 = numpy.array([numpy.var(matrix_betas, axis=0)]*K) # matrix shape K,J, variance of the contrast estimate for each voxel
+     si2 = numpy.ones((20, 20000))
+     # compute meta-analytic statistics 
+     T_map = utils.meta_analyse_FFX(matrix_betas, si2)
+     T_map = T_map.reshape(-1)
+     # compute p-values for inference
+     p_values = 1 - scipy.stats.norm.cdf(T_map)
+     p_values = p_values.reshape(-1)
+     # compute ratio of significant p-values
+     ratio_significance_raw = (p_values<=0.05).sum()/len(p_values)
+     ratio_significance = numpy.round(ratio_significance_raw*100, 4)
+     # for simulation 0 only, check if ratio roughly = 5%
+     lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
+     verdict = 0.05-lim <= ratio_significance_raw <= 0.05+lim
+     # save results
+     results_simulation['FFX'] = {'T_map':T_map, 'p_values':p_values, 'ratio_significance':ratio_significance, 'verdict':verdict, 'si2':si2}
+
 
 
      ##################
@@ -57,12 +68,26 @@ def run_all_MA_algorithms(results_dir, matrix_betas):
      # INPUTS ARE BETA VALUES !
      # final stats is sum(ki*Bi)/sqrt(sum(Ki)) with ki = 1/(tau2 + si2)
 
-     # W = s**2 + t**2
-     W_MFX = numpy.var(matrix_betas, axis=0) +  utils.tau(matrix_betas) # variance of the contrast estimate for each voxel
-     deltas, deltas_var = utils.compute_deltas(matrix_betas, W_MFX, GLM='MFX')
-     # T threshold at k-1 = 2.262
-     T_map = utils.meta_analyse_MFX(deltas, deltas_var)
-     utils.plot_results('2.MFX', matrix_betas, deltas, deltas_var, T_map, W_MFX, results_dir)
+     # si2 = variance of contrast estimate for study i
+     # being assumed to be equal to between study variance (tau2)
+     si2 = numpy.array([numpy.var(matrix_betas, axis=0)]*K) # matrix shape K,J, variance of the contrast estimate for each voxel
+     # tau2 = between study variance
+     tau2 = numpy.var(matrix_betas, axis=0) # vector shape J, variance of the contrast estimate for each voxel
+     # compute meta-analytic statistics
+     T_map = utils.meta_analyse_MFX(matrix_betas, si2, tau2)
+     T_map = T_map.reshape(-1)
+     # compute p-values for inference
+     p_values = 1 - scipy.stats.norm.cdf(T_map)
+     p_values = p_values.reshape(-1)
+     # compute ratio of significant p-values
+     ratio_significance_raw = (p_values<=0.05).sum()/len(p_values)
+     ratio_significance = numpy.round(ratio_significance_raw*100, 4)
+     # for simulation 0 only, check if ratio roughly = 5%
+     lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
+     verdict = 0.05-lim <= ratio_significance_raw <= 0.05+lim
+     # save results
+     results_simulation['MFX'] = {'T_map':T_map, 'p_values':p_values, 'ratio_significance':ratio_significance, 'verdict':verdict, 'si2':si2, 'tau2':tau2}
+
 
 
      ##################
@@ -71,18 +96,27 @@ def run_all_MA_algorithms(results_dir, matrix_betas):
      # INPUTS ARE BETA VALUES !
      # final stats is sum(Bi/sqrt(k))/(tau2+s2)
 
-     # If the si2 are unavailable, the contrast estimates βi can be combined by 
-     # assuming that the within-study contrast variance is negligible in 
-     # comparison to the between-study variance
-     # then σ2 combines the within and between-study variances, i.e. σ2 = Tau2
-     W_RFX = utils.tau(matrix_betas) 
-     # or that σ2 i /ni is constant (σ2 i /ni = σ2 ∀i)
-     # then σ2 = Tau2 + s2
-     W_RFX = utils.tau(matrix_betas) + numpy.var(matrix_betas, axis=0)
-     deltas, deltas_var = utils.compute_deltas(matrix_betas, W_RFX, GLM='RFX')
-     # T threshold at k-1 = 2.262
-     T_map = utils.meta_analyse_RFX(deltas, deltas_var)
-     utils.plot_results('3.RFX', matrix_betas, deltas, deltas_var, T_map, W_RFX, results_dir)
+     # si2 = variance of contrast estimate for study i
+     # being assumed to be equal to between study variance (tau2)
+     si2 = numpy.array([numpy.var(matrix_betas, axis=0)]*K) # matrix shape K,J, variance of the contrast estimate for each voxel
+     # tau2 = between study variance
+     tau2 = numpy.var(matrix_betas, axis=0) # vector shape J, variance of the contrast estimate for each voxel
+     # sigma2 = unbiased sample variance 
+     sigma2 = numpy.max(si2 + tau2,axis=0) # matrix shape K,J
+     # compute meta-analytic statistics
+     T_map = utils.meta_analyse_RFX(matrix_betas, sigma2)
+     T_map = T_map.reshape(-1)
+     # compute p-values for inference
+     p_values = 1 - scipy.stats.norm.cdf(T_map)
+     p_values = p_values.reshape(-1)
+     # compute ratio of significant p-values
+     ratio_significance_raw = (p_values<=0.05).sum()/len(p_values)
+     ratio_significance = numpy.round(ratio_significance_raw*100, 4)
+     # for simulation 0 only, check if ratio roughly = 5%
+     lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
+     verdict = 0.05-lim <= ratio_significance_raw <= 0.05+lim
+     # save results
+     results_simulation['RFX'] = {'T_map':T_map, 'p_values':p_values, 'ratio_significance':ratio_significance, 'verdict':verdict, 'si2':si2, 'tau2':tau2, 'sigma2':sigma2}
 
 
      ##################
@@ -97,103 +131,40 @@ def run_all_MA_algorithms(results_dir, matrix_betas):
      ##################
      # INPUTS ARE P VALUES !
      # final stats is -2 sum(log(pi))
-
-     ## With data generated to have decreasing amount of singificant p-values
-     #---------------------
-     vector_fisher = utils.meta_analyse_Fisher(matrix_p_generated)
-
-     # K=10 thus Chi2 threshold at 2k(20) => 31.41
-     f, axs = plt.subplots(4, figsize=(5, 8))
-     seaborn.heatmap(matrix_p_generated[:, :50], vmin=0, cmap='Reds_r', ax=axs[0], cbar_kws={'shrink': 0.5})
-     axs[0].title.set_text("generated p values")
-     axs[0].set_ylabel("K teams")
-     axs[0].set_xlabel('J Voxels')
-     seaborn.heatmap(matrix_p_generated[:, :50], vmin=0, vmax=0.06, cmap='Reds_r', mask=matrix_p_generated[:, :50] > 0.05, ax=axs[1],cbar_kws={'shrink': 0.5})
-     axs[1].title.set_text("significant p values")
-     axs[1].set_ylabel("K teams")
-     axs[1].set_xlabel('J Voxels')
-     seaborn.heatmap(matrix_p_generated[:, :50].mean(axis=0).reshape(1, -1), cmap='Reds_r', square=True, ax=axs[2],cbar_kws={'shrink': 0.5})
-     axs[2].title.set_text("Mean p values")
-     axs[2].set_ylabel("p")
-     axs[2].set_xlabel('J Voxels')
-     seaborn.heatmap(vector_fisher.reshape(1, -1)[:, :50], cmap='Reds', square=True, mask=vector_fisher.reshape(1, -1)[:, :50] < 55.758, ax=axs[3],cbar_kws={'shrink': 0.5})
-     ratio = (vector_fisher>=55.758).sum()/vector_fisher.reshape(-1).__len__()
-     lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
-     verdict = 0.05-lim <= ratio <= 0.05+lim
-     axs[3].title.set_text("Sig X2 >= 55.758, ratio={}, {}".format(numpy.round(ratio, 3), verdict))
-     axs[3].set_ylabel("X2")
-     axs[3].set_xlabel('J Voxels')
-
-     plt.suptitle('Results for Fisher with generated p')
-     plt.tight_layout()
-     plt.savefig(opj(results_dir, "4a.Fisher_decreasing_pvalues_maps.png"))
-     plt.close('all')
-
-
-     ## With same data as in the other simulations
-     #---------------------
+     # compute meta-analytic statistics for inference
      vector_fisher = utils.meta_analyse_Fisher(matrix_p)
-
-     # K=20 thus Chi2 threshold at 2k (40) => 55.758
-     f, axs = plt.subplots(4, figsize=(5, 8))
-     seaborn.heatmap(matrix_p[:, :50], vmin=0, cmap='Reds_r', ax=axs[0], cbar_kws={'shrink': 0.5})
-     axs[0].title.set_text("p values (from standardized Betas)")
-     axs[0].set_ylabel("K teams")
-     axs[0].set_xlabel('J Voxels')
-     seaborn.heatmap(matrix_p[:, :50], vmin=0, vmax=0.06, cmap='Reds_r', mask=matrix_p[:, :50] > 0.05, ax=axs[1],cbar_kws={'shrink': 0.5})
-     axs[1].title.set_text("significant p values")
-     axs[1].set_ylabel("K teams")
-     axs[1].set_xlabel('J Voxels')
-     seaborn.heatmap(matrix_p.mean(axis=0).reshape(1, -1)[:, :50], cmap='Reds_r', square=True, ax=axs[2],cbar_kws={'shrink': 0.5})
-     axs[2].title.set_text("Mean p values")
-     axs[2].set_ylabel("p")
-     axs[2].set_xlabel('J Voxels')
-     seaborn.heatmap(vector_fisher.reshape(1, -1)[:, :50], cmap='Reds', square=True, mask=vector_fisher.reshape(1, -1)[:, :50] < 55.758, ax=axs[3],cbar_kws={'shrink': 0.5})
-     ratio = (vector_fisher>=55.758).sum()/vector_fisher.reshape(-1).__len__()
+     # compute ratio of significant p-values
+     ratio_significance = numpy.round((vector_fisher>=55.758).sum()/len(vector_fisher.reshape(-1)), 3)*100
+     # for simulation 0 only, check if ratio roughly = 5%
      lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
-     verdict = 0.05-lim <= ratio <= 0.05+lim
-     axs[3].title.set_text("Sig X2 >= 55.758, ratio={}, {}".format(numpy.round(ratio, 3), verdict))
-     axs[3].set_ylabel("X2")
-     axs[3].set_xlabel('J Voxels')
+     verdict = 0.05-lim <= (vector_fisher>=55.758).sum()/len(vector_fisher.reshape(-1)) <= 0.05+lim
+     # save results
+     results_simulation['Fisher'] = {'vector_fisher':vector_fisher, 'ratio_significance':ratio_significance, 'verdict':verdict}
 
-     plt.suptitle('Results for Fisher')
-     plt.tight_layout()
-     plt.savefig(opj(results_dir, "4b.Fisher_maps.png"))
-     plt.close('all')
 
 
      ##################
      ### Stouffer (adapted Fisher) FFX
      ##################
-     # final stats is sqrt(k)*(sum(Zi)/k
-     vector_stouffer = utils.meta_analyse_Stouffer(matrix_z)
-     stouffer_p = 1 - scipy.stats.norm.cdf(vector_stouffer)
+     # INPUTS ARE Z VALUES !
+     # final stats is sqrt(k*1/k*sum(Zi))
 
-     f, axs = plt.subplots(4, figsize=(5, 8))
-     seaborn.heatmap(matrix_z[:, :50], center=0, cmap='coolwarm', ax=axs[0],cbar_kws={'shrink': 0.5})
-     axs[0].title.set_text("Z values (Standardized Betas)")
-     axs[0].set_ylabel("K teams")
-     axs[0].set_xlabel('J Voxels')
-     seaborn.heatmap(matrix_z[:, :50].mean(axis=0).reshape(1, -1), center=0, cmap='coolwarm', square=True, ax=axs[1],cbar_kws={'shrink': 0.5})
-     axs[1].title.set_text("Mean Z values")
-     axs[1].set_ylabel("Z")
-     axs[1].set_xlabel('J Voxels')
-     seaborn.heatmap(vector_stouffer.reshape(1, -1)[:, :50], center=0, cmap='coolwarm', square=True, ax=axs[2],cbar_kws={'shrink': 0.5})
-     axs[2].title.set_text("Stouffer Z values")
-     axs[2].set_ylabel("Z")
-     axs[2].set_xlabel('J Voxels')
-     seaborn.heatmap(stouffer_p.reshape(1, -1)[:, :50], vmin=0, vmax=0.06, cmap='Reds_r', square=True, mask=stouffer_p.reshape(1, -1)[:, :50] > 0.05, ax=axs[3],cbar_kws={'shrink': 0.5})
-     ratio = (stouffer_p<=0.05).sum()/stouffer_p.reshape(-1).__len__()
+     # compute meta-analytic statistics
+     T_map = utils.meta_analyse_Stouffer(matrix_z)
+     T_map = T_map.reshape(-1)
+     # compute p-values for inference
+     p_values = 1 - scipy.stats.norm.cdf(T_map)
+     p_values = p_values.reshape(-1)
+     # compute ratio of significant p-values
+     ratio_significance_raw = (p_values<=0.05).sum()/len(p_values)
+     ratio_significance = numpy.round(ratio_significance_raw*100, 4)
+     # for simulation 0 only, check if ratio roughly = 5%
      lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
-     verdict = 0.05-lim <= ratio <= 0.05+lim
-     axs[3].title.set_text("Sign p values, ratio={}, {}".format(numpy.round(ratio, 3), verdict))
-     axs[3].set_ylabel("p")
-     axs[3].set_xlabel('J Voxels')
+     verdict = 0.05-lim <= ratio_significance_raw <= 0.05+lim
+     # save results
+     results_simulation['Stouffer'] = {'T_map':T_map, 'p_values':p_values, 'ratio_significance':ratio_significance, 'verdict':verdict}
 
-     plt.suptitle('Results for Stouffer')
-     plt.tight_layout()
-     plt.savefig(opj(results_dir, "5.Stouffer_maps.png"))
-     plt.close('all')
+
 
 
      ##################
@@ -236,8 +207,21 @@ def run_all_MA_algorithms(results_dir, matrix_betas):
      ##################
 
      Q = numpy.corrcoef(matrix_z.T) # shape K*K
+     # compute meta-analytic statistics
      Intuitive_solution = matrix_z.sum(axis=1)/matrix_z.shape[1]
      Intuitive_solution_var = numpy.ones(K).dot(Q)/K**2
+     # compute p-values for inference
+     p_values = 1 - scipy.stats.norm.cdf(Intuitive_solution)
+     # compute ratio of significant p-values
+     ratio_significance_raw = (p_values<=0.05).sum()/len(p_values)
+     ratio_significance = numpy.round(ratio_significance_raw*100, 4)
+     
+     # for simulation 0 only, check if ratio roughly = 5%
+     lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
+     verdict = 0.05-lim <= ratio_significance_raw <= 0.05+lim
+
+     # save results
+     results_simulation['intuitive_sol'] = {'T_map':Intuitive_solution, 'p_values':p_values, 'ratio_significance':ratio_significance, 'verdict':verdict, 'Q':Q}
 
      ##################
      ### consensus (scaling before)
@@ -267,40 +251,16 @@ def run_all_MA_algorithms(results_dir, matrix_betas):
      attenuated_variance = numpy.divide(numpy.ones(K).T.dot(Q).dot(numpy.ones(K)), K**2) # shape K
      attenuated_std = numpy.sqrt(attenuated_variance)
      Z_star_consensus = numpy.divide(Z_star_mean_j.reshape(-1, 1), attenuated_std.reshape(1, -1)).dot(consensus_std) + consensus_mean
-     p = 1 - scipy.stats.norm.cdf(Z_star_consensus)
-
-     f, axs = plt.subplots(5, figsize=(5, 8))
-     seaborn.heatmap(matrix_z.T[:, :50], center=0, cmap='coolwarm', ax=axs[0],cbar_kws={'shrink': 0.5})
-     axs[0].title.set_text("Original Z values")
-     axs[0].set_ylabel("K teams")
-     axs[0].set_xlabel('J Voxels')
-     # debugging
-     # a = Z_star_k.T
-     # a.sort()
-     seaborn.heatmap(Z_star_k.T[:, :50], center=0, cmap='coolwarm', ax=axs[1],cbar_kws={'shrink': 0.5})
-     axs[1].title.set_text("Standardized Z values")
-     axs[1].set_ylabel("K teams")
-     axs[1].set_xlabel('J Voxels')
-     seaborn.heatmap(matrix_z.mean(axis=1).reshape(1, -1)[:, :50], center=0, cmap='coolwarm', square=True, ax=axs[2],cbar_kws={'shrink': 0.5})
-     axs[2].title.set_text("Mean Z values")
-     axs[2].set_ylabel("Z")
-     axs[2].set_xlabel('J Voxels')
-     seaborn.heatmap(Z_star_consensus.reshape(1, -1)[:, :50], center=0, cmap='coolwarm', square=True, ax=axs[3],cbar_kws={'shrink': 0.5})
-     axs[3].title.set_text("T values")
-     axs[3].set_ylabel("T")
-     axs[3].set_xlabel('J Voxels')
-     seaborn.heatmap(p.reshape(1, -1)[:, :50], vmin=0, cmap='Reds_r', square=True, mask=p.reshape(1, -1)[:, :50] > 0.05, ax=axs[4],cbar_kws={'shrink': 0.5})
-     ratio = (p<=0.05).sum()/p.reshape(-1).__len__()
+     p_values = 1 - scipy.stats.norm.cdf(Z_star_consensus)
+     # compute ratio of significant p-values
+     ratio_significance_raw = (p_values<=0.05).sum()/len(p_values)
+     ratio_significance = numpy.round(ratio_significance_raw*100, 4)
+     
+     # for simulation 0 only, check if ratio roughly = 5%
      lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
-     verdict = 0.05-lim <= ratio <= 0.05+lim
-     axs[4].title.set_text("Sign p values, ratio={}, {}".format(numpy.round(ratio, 3), verdict))
-     axs[4].set_ylabel("p")
-     axs[4].set_xlabel('J Voxels')
-     plt.suptitle('Results for consensus')
-     plt.tight_layout()
-     plt.savefig(opj(results_dir, "6.Consensus_maps.png"))
-     plt.close('all')
-
+     verdict = 0.05-lim <= ratio_significance_raw <= 0.05+lim
+     # save results
+     results_simulation['consensus'] = {'T_map':Z_star_consensus, 'p_values':p_values, 'ratio_significance':ratio_significance, 'verdict':verdict, 'Q':Q}
 
      ##################
      ### NARPS code consensus (scaling supposed to be done, but instead res_var used in the equation)
@@ -315,39 +275,23 @@ def run_all_MA_algorithms(results_dir, matrix_betas):
 
      # T  =  mean(y,0)/s-hat-2
      # use diag to get s_hat2 for each variable
-     T = (numpy.mean(matrix_betas, 0) - res_mean
+     T_map = (numpy.mean(matrix_betas, 0) - res_mean
           )/numpy.sqrt(VarMean)*numpy.sqrt(res_var) + res_mean
+     T_map = T_map.reshape(-1)
 
      # Assuming variance is estimated on whole image
      # and assuming infinite df
-     p = 1 - scipy.stats.norm.cdf(T)
 
-
-     f, axs = plt.subplots(4, figsize=(5, 8))
-     seaborn.heatmap(matrix_betas[:, :50], center=0, cmap='coolwarm', ax=axs[0],cbar_kws={'shrink': 0.5})
-     axs[0].title.set_text("Original Z values")
-     axs[0].set_ylabel("K teams")
-     axs[0].set_xlabel('J Voxels')
-     seaborn.heatmap(matrix_betas.mean(axis=0).reshape(1, -1)[:, :50], center=0, cmap='coolwarm', square=True, ax=axs[1],cbar_kws={'shrink': 0.5})
-     axs[1].title.set_text("Mean Z values")
-     axs[1].set_ylabel("Z")
-     axs[1].set_xlabel('J Voxels')
-     seaborn.heatmap(T.reshape(1, -1)[:, :50], center=0, cmap='coolwarm', square=True, ax=axs[2],cbar_kws={'shrink': 0.5})
-     axs[2].title.set_text("T values")
-     axs[2].set_ylabel("T")
-     axs[2].set_xlabel('J Voxels')
-     seaborn.heatmap(p.reshape(1, -1)[:, :50], vmin=0, cmap='Reds_r', square=True, mask=p.reshape(1, -1)[:, :50] > 0.05, ax=axs[3],cbar_kws={'shrink': 0.5})
-     ratio = (p<=0.05).sum()/p.reshape(-1).__len__()
+     p_values = 1 - scipy.stats.norm.cdf(T_map)
+     p_values = p_values.reshape(-1)
+     # compute ratio of significant p-values
+     ratio_significance_raw = (p_values<=0.05).sum()/len(p_values)
+     ratio_significance = numpy.round(ratio_significance_raw*100, 4)
+     # for simulation 0 only, check if ratio roughly = 5%
      lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
-     verdict = 0.05-lim <= ratio <= 0.05+lim
-     axs[3].title.set_text("Sign p values, ratio={}, {}".format(numpy.round(ratio, 3), verdict))
-     axs[3].set_ylabel("p")
-     axs[3].set_xlabel('J Voxels')
-     plt.suptitle('Results for Narps consensus')
-     plt.tight_layout()
-     plt.savefig(opj(results_dir, "7.ConsensusNarps_maps.png"))
-     plt.close('all')
-
+     verdict = 0.05-lim <= ratio_significance_raw <= 0.05+lim
+     # save results
+     results_simulation['consensus'] = {'T_map':T_map, 'p_values':p_values, 'ratio_significance':ratio_significance, 'verdict':verdict, 'Q':Q0}
 
      ##################
      ### same data consensus meta analysis (no scaling)
@@ -362,38 +306,24 @@ def run_all_MA_algorithms(results_dir, matrix_betas):
 
      # T  =  mean(y,0)/s-hat-2
      # use diag to get s_hat2 for each variable
-     T = (numpy.mean(matrix_betas, 0) - res_mean
+     T_map = (numpy.mean(matrix_betas, 0) - res_mean
           )/numpy.sqrt(VarMean) + res_mean
+     T_map = T_map.reshape(-1)
 
      # Assuming variance is estimated on whole image
      # and assuming infinite df
-     p = 1 - scipy.stats.norm.cdf(T)
+     p_values = 1 - scipy.stats.norm.cdf(T_map)
+     p_values = p_values.reshape(-1)
 
+     # compute ratio of significant p-values
+     ratio_significance_raw = (p_values<=0.05).sum()/len(p_values)
+     ratio_significance = numpy.round(ratio_significance_raw*100, 4)
 
-     f, axs = plt.subplots(4, figsize=(5, 8))
-     seaborn.heatmap(matrix_betas[:, :50], center=0, cmap='coolwarm', ax=axs[0],cbar_kws={'shrink': 0.5})
-     axs[0].title.set_text("Original Z values")
-     axs[0].set_ylabel("K teams")
-     axs[0].set_xlabel('J Voxels')
-     seaborn.heatmap(matrix_betas.mean(axis=0).reshape(1, -1)[:, :50], center=0, cmap='coolwarm', square=True, ax=axs[1],cbar_kws={'shrink': 0.5})
-     axs[1].title.set_text("Mean Z values")
-     axs[1].set_ylabel("Z")
-     axs[1].set_xlabel('J Voxels')
-     seaborn.heatmap(T.reshape(1, -1)[:, :50], center=0, cmap='coolwarm', square=True, ax=axs[2],cbar_kws={'shrink': 0.5})
-     axs[2].title.set_text("T values")
-     axs[2].set_ylabel("T")
-     axs[2].set_xlabel('J Voxels')
-     seaborn.heatmap(p.reshape(1, -1)[:, :50], vmin=0, cmap='Reds_r', square=True, mask=p.reshape(1, -1)[:, :50] > 0.05, ax=axs[3],cbar_kws={'shrink': 0.5})
-     ratio = (p<=0.05).sum()/p.reshape(-1).__len__()
+     # for simulation 0 only, check if ratio roughly = 5%
      lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
-     verdict = 0.05-lim <= ratio <= 0.05+lim
-     axs[3].title.set_text("Sign p values, ratio={}, {}".format(numpy.round(ratio, 3), verdict))
-     axs[3].set_ylabel("p")
-     axs[3].set_xlabel('J Voxels')
-     plt.suptitle('Results for Same Data consensus')
-     plt.tight_layout()
-     plt.savefig(opj(results_dir, "8.SameDataConsensus_maps.png"))
-     plt.close('all')
+     verdict = 0.05-lim <= ratio_significance_raw <= 0.05+lim
+     # save results
+     results_simulation['samedata_consensus'] = {'T_map':T_map, 'p_values':p_values, 'ratio_significance':ratio_significance, 'verdict':verdict, 'Q':Q0}
 
 
      ##################
@@ -409,38 +339,22 @@ def run_all_MA_algorithms(results_dir, matrix_betas):
 
      # T  =  mean(y,0)/s-hat-2
      # use diag to get s_hat2 for each variable
-     T = numpy.mean(matrix_betas, 0)/numpy.sqrt(VarMean)
+     T_map = numpy.mean(matrix_betas, 0)/numpy.sqrt(VarMean)
+     T_map = T_map.reshape(-1)
 
      # Assuming variance is estimated on whole image
      # and assuming infinite df
-     p = 1 - scipy.stats.norm.cdf(T)
-
-
-     f, axs = plt.subplots(4, figsize=(5, 8))
-     seaborn.heatmap(matrix_betas[:, :50], center=0, cmap='coolwarm', ax=axs[0],cbar_kws={'shrink': 0.5})
-     axs[0].title.set_text("Original Z values")
-     axs[0].set_ylabel("K teams")
-     axs[0].set_xlabel('J Voxels')
-     seaborn.heatmap(matrix_betas.mean(axis=0).reshape(1, -1)[:, :50], center=0, cmap='coolwarm', square=True, ax=axs[1],cbar_kws={'shrink': 0.5})
-     axs[1].title.set_text("Mean Z values")
-     axs[1].set_ylabel("Z")
-     axs[1].set_xlabel('J Voxels')
-     seaborn.heatmap(T.reshape(1, -1)[:, :50], center=0, cmap='coolwarm', square=True, ax=axs[2],cbar_kws={'shrink': 0.5})
-     axs[2].title.set_text("T values")
-     axs[2].set_ylabel("T")
-     axs[2].set_xlabel('J Voxels')
-     seaborn.heatmap(p.reshape(1, -1)[:, :50], vmin=0, cmap='Reds_r', square=True, mask=p.reshape(1, -1)[:, :50] > 0.05, ax=axs[3],cbar_kws={'shrink': 0.5})
-     ratio = (p<=0.05).sum()/p.reshape(-1).__len__()
+     p_values = 1 - scipy.stats.norm.cdf(T_map)
+     p_values = p_values.reshape(-1)
+     # compute ratio of significant p-values
+     ratio_significance_raw = (p_values<=0.05).sum()/len(p_values)
+     ratio_significance = numpy.round(ratio_significance_raw*100, 4)
+     
+     # for simulation 0 only, check if ratio roughly = 5%
      lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
-     verdict = 0.05-lim <= ratio <= 0.05+lim
-     axs[3].title.set_text("Sign p values, ratio={}, {}".format(numpy.round(ratio, 3), verdict))
-     axs[3].set_ylabel("p")
-     axs[3].set_xlabel('J Voxels')
-     plt.suptitle('Results for Same data FX')
-     plt.tight_layout()
-     plt.savefig(opj(results_dir, "9.SameDataFX_maps.png"))
-     plt.close('all')
-
+     verdict = 0.05-lim <= ratio_significance_raw <= 0.05+lim
+     # save results
+     results_simulation['samedata_FFX'] = {'T_map':T_map, 'p_values':p_values, 'ratio_significance':ratio_significance, 'verdict':verdict, 'Q':Q0}
 
 
      ##################
@@ -468,39 +382,25 @@ def run_all_MA_algorithms(results_dir, matrix_betas):
 
      # T  =  mean(y,0)/s-hat-2
      # use diag to get s_hat2 for each variable
-     T = numpy.mean(matrix_betas, 0)/numpy.sqrt(VarMean)
+     T_map = numpy.mean(matrix_betas, 0)/numpy.sqrt(VarMean)
+     T_map = T_map.reshape(-1)
 
      # Assuming variance is estimated on whole image
      # and assuming infinite df
-     p = 1 - scipy.stats.norm.cdf(T)
-
-
-     f, axs = plt.subplots(4, figsize=(5, 8))
-     seaborn.heatmap(matrix_betas[:, :50], center=0, cmap='coolwarm', ax=axs[0],cbar_kws={'shrink': 0.5})
-     axs[0].title.set_text("Original Z values")
-     axs[0].set_ylabel("K teams")
-     axs[0].set_xlabel('J Voxels')
-     seaborn.heatmap(matrix_betas.mean(axis=0).reshape(1, -1)[:, :50], center=0, cmap='coolwarm', square=True, ax=axs[1],cbar_kws={'shrink': 0.5})
-     axs[1].title.set_text("Mean Z values")
-     axs[1].set_ylabel("Z")
-     axs[1].set_xlabel('J Voxels')
-     seaborn.heatmap(T.reshape(1, -1)[:, :50], center=0, cmap='coolwarm', square=True, ax=axs[2],cbar_kws={'shrink': 0.5})
-     axs[2].title.set_text("T values")
-     axs[2].set_ylabel("T")
-     axs[2].set_xlabel('J Voxels')
-     seaborn.heatmap(p.reshape(1, -1)[:, :50], vmin=0, cmap='Reds_r', square=True, mask=p.reshape(1, -1)[:, :50] > 0.05, ax=axs[3],cbar_kws={'shrink': 0.5})
-     ratio = (p<=0.05).sum()/p.reshape(-1).__len__()
+     p_values = 1 - scipy.stats.norm.cdf(T_map)
+     p_values = p_values.reshape(-1)
+     # compute ratio of significant p-values
+     ratio_significance_raw = (p_values<=0.05).sum()/len(p_values)
+     ratio_significance = numpy.round(ratio_significance_raw*100, 4)
+     
+     # for simulation 0 only, check if ratio roughly = 5%
      lim = 2*numpy.sqrt(0.05*(1-0.05)/20000)
-     verdict = 0.05-lim <= ratio <= 0.05+lim
-     axs[3].title.set_text("Sign p values, ratio={}, {}".format(numpy.round(ratio, 3), verdict))
-     axs[3].set_ylabel("p")
-     axs[3].set_xlabel('J Voxels')
-     plt.suptitle('Results for Random data FX')
-     plt.tight_layout()
-     plt.savefig(opj(results_dir, "10.RandomDataFX_maps.png"))
-     plt.close('all')
+     verdict = 0.05-lim <= ratio_significance_raw <= 0.05+lim
+     # save results
+     results_simulation['samedata_RFX'] = {'T_map':T_map , 'p_values':p_values, 'ratio_significance':ratio_significance, 'verdict':verdict, 'Q':Q1}
 
      print("** ENDED WELL **")
+     return results_simulation
 
 
 
