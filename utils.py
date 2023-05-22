@@ -9,6 +9,7 @@ import scipy
 from os.path import join as opj
 import sklearn.metrics
 import pandas
+from sklearn.preprocessing import StandardScaler
 
 #######################################
 # UTILS
@@ -101,112 +102,6 @@ def non_null_data_heterogeneous(K: int, J: int, covar: float, mean: float) -> nu
 # MATRIX OPERATIONS
 #######################################
 
-def is_invertible(matrix: numpy.ndarray) -> bool:
-    """
-    Parameters
-    ---------
-    matrix : numpy.ndarray  
-
-    Returns
-    -------
-    Bool : True if matrix is invertible
-    """
-    return a.shape[0] == a.shape[1] and numpy.linalg.matrix_rank(a) == a.shape[0]
-
-
-# voxels by voxels
-def compute_delta_for_one_voxel(vector_betas: numpy.ndarray, w: float, GLM: str) -> list:
-    """
-    Compute delta for a voxel given a number of teams
-
-    Problem stated as B = X * delta + residuals
-    solution (OLS solution) => delta = inverse(X_transpose*W_inverse*X)*X_transpose*W_inverse*B 
-    
-    Parameters
-    ---------
-    vector_betas : numpy.ndarray
-        Vector of contrast estimates dimension k studies * 1 voxel
-    w : scalar
-        scalar of the contrast estimate variance for 1 voxel
-    GLM : str
-        if 'RDX', formulas to compute delta and delat_var are differents:
-        delta = numpy.linalg.inv(X.T**X)*X.T*matrix_betas
-        delta_var  = delta.dot(w)
-        instead of 
-        delta = numpy.linalg.inv(X.T*numpy.linalg.inv(w)*X)*X.T*numpy.linalg.inv(w)*matrix_betas
-        delta_var  = numpy.linalg.inv((X.T*numpy.linalg.inv(w)).dot(X))
-    
-    Returns
-    -------
-    delta : numpy.ndarray
-        estimated meta-analytic parameter
-    delta_var : numpy.ndarray
-        estimated sampling variance of meta-analytic parameter
-    """
-    vector_betas = vector_betas.reshape(-1, 1) # reshape cause needs 2D to compute inverse matrix
-    X = numpy.ones(vector_betas.shape) # design matrix
-    
-    if GLM == '3.RFX':
-        # delta = numpy.linalg.inv(X.T**X)*X.T*matrix_betas
-        try:
-            delta = numpy.linalg.inv(X.T.dot(X))
-            delta_var  = delta.dot(w)
-            delta = delta.dot(X.T)
-            delta = delta.dot(vector_betas)
-            return [float(delta), float(delta_var)]
-        except:
-            print("Cannot compute delta, matrix is singular...")
-
-   
-    # delta = numpy.linalg.inv(X.T*numpy.linalg.inv(w)*X)*X.T*numpy.linalg.inv(w)*matrix_betas
-    try:
-        delta = X.T*numpy.linalg.inv(w)
-        delta= delta.dot(X)
-        delta_var  = numpy.linalg.inv(delta)
-        delta = delta_var.dot(X.T)
-        delta = delta*numpy.linalg.inv(w)  # the bigger the variance, the smaller the final delta
-        delta = delta.dot(vector_betas)
-
-        return [float(delta), float(delta_var)]
-    except:
-        print("Cannot compute delta, matrix is singular...")
-
-
-def compute_deltas(matrix_betas: numpy.ndarray, W: float, GLM='1.FFX') -> numpy.ndarray:
-    """
-    Iterate through each voxel to compute their associated delta, given a number of teams
-    print the output
-
-    Parameters
-    ---------
-    matrix_betas : numpy.ndarray
-        Matrix of contrast estimates dimension K studies * J voxels
-    W : numpy.ndarray
-        Vector of the contrast estimate variance for each voxel
-    GLM : str
-        Default : 'FFX'
-        if 'RDX', impact next step => compute_delta_for_one_voxel()
-
-    Returns
-    -------
-    numpy.ndarray : including the deltas (one for each voxel) and the deltas variance (one for each voxel)
-    """
-    J = matrix_betas.shape[1]
-    deltas = []
-    deltas_var = []
-    for j_voxel in range(J):
-        d, d_var = compute_delta_for_one_voxel(matrix_betas[:, j_voxel], W[j_voxel].reshape(-1, 1), GLM=GLM) 
-        deltas.append(d)
-        deltas_var.append(d_var)
-    ## Debugging
-    # print('Deltas per voxel')
-    # print(deltas)
-    # print('Mean per voxel')
-    # print(matrix_betas.mean(axis=0))
-    # print('Deltas variance per voxel')
-    # print(deltas_var)
-    return numpy.array([deltas, deltas_var])
-
 
 def tau(matrix: numpy.ndarray) -> float:
     """
@@ -250,7 +145,7 @@ def meta_analyse_FFX(matrix_betas: numpy.ndarray, si2: numpy.ndarray) -> numpy.n
     matrix_betas : numpy.ndarray
         matrix of generated beta values shape K,J
     si2 : numpy.ndarray
-        vector of shape J
+        matrix of shape K,J
 
     Returns
     -------
@@ -272,7 +167,7 @@ def meta_analyse_MFX(matrix_betas: numpy.ndarray, si2: numpy.ndarray, tau2: nump
     matrix_betas : numpy.ndarray
         matrix of generated beta values shape K,J
     si2 : numpy.ndarray
-        vector of shape J
+        matrix of shape K,J
     tau2 : numpy.ndarray
         vector of shape J
 
@@ -298,7 +193,7 @@ def meta_analyse_RFX(matrix_betas: numpy.ndarray, sigma2: numpy.ndarray) -> nump
     matrix_betas : numpy.ndarray
         matrix of generated beta values shape K,J
     sigma2 : numpy.ndarray
-        unbiased sample variance of shape J
+        unbiased sample variance of shape K, J
 
     Returns
     -------
@@ -357,94 +252,106 @@ def plot_generated_data(data_generated: dict):
     plt.savefig("results_simulations/generated_data_info.png")
     plt.close('all')
 
+def distribution_inversed(J):
+    distribution_inversed = []
+    for i in range(J):
+        distribution_inversed.append(i/J)
+    return distribution_inversed     
 
 
 def plot_simulation_results(simulation_nb, results):
     print("Plotting results for simulation {}".format(simulation_nb))
     matrix_betas = results['data']['matrix_betas']
+    K = results['data']['matrix_betas'].shape[0]
+    J = results['data']['matrix_betas'].shape[1]
     matrix_z = results['data']['matrix_z']
     matrix_p = results['data']['matrix_p']
-    p_theoretical = results['Stouffer']['p_values'].copy()
-    p_theoretical.sort()
+    p_cum = distribution_inversed(J)
+
+    ###### PLOTTING INDEPENDANT DATA RESULTS
+
     f, axs = plt.subplots(4, 5, figsize=(20, 8)) 
     for index, title in enumerate(['Fisher', 'Stouffer', 'FFX', 'MFX', 'RFX']):
-        if title == 'Fisher':
-            vector_fisher = results[title]['vector_fisher'].copy()
-            ratio_significance = results[title]['ratio_significance']
-            verdict = results[title]['verdict']
-
-            axs[0, index].axis('off')
-            axs[0, index].title.set_text(" {}\n ".format(title))
-            axs[1, index].axis('off')
-
-            vector_fisher_sorted = vector_fisher.copy()
-            vector_fisher_sorted.sort()
-            axs[2, index].hist(vector_fisher_sorted, bins=100, color='y')
-            axs[2, index].title.set_text("X2 values distribution")
-            axs[2, index].set_ylabel("frequency")
-            axs[2, index].set_xlabel("X2 value")
-            axs[2, index].axvline(55.758, ymin=0, color='black', linewidth=0.5, linestyle='--')
-
-            p_obs_p_cum = vector_fisher_sorted - vector_fisher_sorted
-            # pobs-pcum and pcum distribution
-            axs[3, index].plot(vector_fisher_sorted, p_obs_p_cum, color='y')
-            axs[3, index].title.set_text("p-plot")
-            axs[3, index].set_xlabel("cumulative X2")
-            axs[3, index].set_ylabel("observed X2 - cumulative X2")
-            axs[3, index].axvline(55.758, ymin=-1, color='black', linewidth=0.5, linestyle='--')
-            axs[3, index].axhline(0, color='black', linewidth=0.5, linestyle='--')
-            axs[3, index].set_xlim(0, 100)
-            axs[3, index].set_ylim(-0.5, 0.5)
-            axs[3, index].text(2, 0.25, 'ratio={}%, {}'.format(ratio_significance, verdict))
-
-            plt.suptitle('{}'.format(title))
-            continue # next loop iteration
-
-        # else    
         T_map = results[title]['T_map']
         p_values = results[title]['p_values']
         ratio_significance = results[title]['ratio_significance']
         verdict = results[title]['verdict']
-
+        distrib = results[title]['distrib']
         # display p over t disctribution
         df_obs = pandas.DataFrame(data=numpy.array([p_values, T_map]).T, columns=["p_values", "T_values"])
-        df_cum = df_obs.sort_values(by=['p_values'])
+        df_obs = df_obs.sort_values(by=['p_values'])
+
+
+        if title=='Fisher':
+            t_expected = scipy.stats.chi2.rvs(size=J, df=40)
+            p_expected = 1 - scipy.stats.chi2.cdf(t_expected, df=40)
+        elif title=='Stouffer':
+            t_expected = scipy.stats.norm.rvs(size=J)
+            p_expected = 1-scipy.stats.norm.cdf(t_expected)
+        elif title=='FFX':
+            t_expected = scipy.stats.t.rvs(df=399, size=J)
+            p_expected = 1-scipy.stats.t.cdf(t_expected, df=399)
+        else:
+            t_expected = scipy.stats.t.rvs(df=19, size=J)
+            p_expected = 1-scipy.stats.t.cdf(t_expected, df=19)
+
+        df_exp = pandas.DataFrame(data=numpy.array([p_expected, t_expected]).T, columns=["p_expected", "t_expected"])
+        df_exp = df_exp.sort_values(by=['p_expected'])
+        p_expected = df_exp['p_expected'].values
+        t_expected = df_exp['t_expected'].values
+
         # t and p distribution
-        axs[0, index].plot(df_cum['T_values'].values, df_cum['p_values'].values, color='tab:blue')
-        axs[0, index].title.set_text(" {}\np values of t statistics (1-tail)".format(title))
-        axs[0, index].set_xlabel("t statistics")
-        axs[0, index].set_ylabel("p values")
-        axs[0, index].set_xlim(0, 4)
 
-        axs[1, index].hist(df_cum['T_values'].values, bins=100, color='green')
-        axs[1, index].title.set_text("t statistics distribution")
+        axs[0, index].plot(df_obs['T_values'].values, df_obs['p_values'].values, color='tab:blue')
+        # small window in
+        axs[0, index].title.set_text(" {}\np values of meta-analytic stats (1-tail)".format(title))
+        axs[0, index].set_xlabel("stats value")
+        axs[0, index].set_ylabel("p value")
+        if title!='Fisher': # Chi2 distribution instead of t distribution
+            axs[0, index].set_xlim(0, 4)
+            add_small_graph(t=t_expected, p=p_expected, graph='plot', col=int(index), row=0)
+        else:
+            # add small graph window within the graph for expected results
+            add_small_graph(t=t_expected, p=p_expected, graph='plot_fisher', col=int(index), row=0)
+
+        axs[1, index].hist(df_obs['T_values'].values, bins=100, color='green')
+        axs[1, index].title.set_text("{}".format(distrib))
         axs[1, index].set_ylabel("frequency")
-        axs[1, index].set_xlabel("t value")
+        axs[1, index].set_xlabel("stats value")
 
-        axs[2, index].hist(df_cum['p_values'].values, bins=100, color='y')
+        # add small graph window within the graph for expected results
+        add_small_graph(t=t_expected, graph='hist', col=int(index), row=1)
+
+        axs[2, index].hist(df_obs['p_values'].values, bins=100, color='y')
+        axs[2, index].hist(p_expected, bins=100, color='grey', alpha=0.3)
         axs[2, index].title.set_text("p values distribution")
         axs[2, index].set_ylabel("frequency")
         axs[2, index].set_xlabel("p value")
         axs[2, index].axvline(0.05, ymin=0, color='black', linewidth=0.5, linestyle='--')
 
-        p_obs_p_cum = df_cum['p_values'].values - p_theoretical
+        p_obs_p_cum = -numpy.log10(df_obs['p_values'].values) - -numpy.log10(p_cum) 
         # pobs-pcum and pcum distribution
-        axs[3, index].plot(-numpy.log10(p_theoretical), p_obs_p_cum, color='y')
+        axs[3, index].plot(-numpy.log10(p_cum), p_obs_p_cum, color='y')
         axs[3, index].title.set_text("p-plot")
         axs[3, index].set_xlabel("-log10 cumulative p")
         axs[3, index].set_ylabel("observed p - cumulative p")
         axs[3, index].axvline(-numpy.log10(0.05), ymin=-1, color='black', linewidth=0.5, linestyle='--')
         axs[3, index].axhline(0, color='black', linewidth=0.5, linestyle='--')
         axs[3, index].set_xlim(0, 6)
-        axs[3, index].set_ylim(-0.5, 0.5)
-        axs[3, index].text(2, 0.25, 'ratio={}%, {}'.format(ratio_significance, verdict))
+        axs[3, index].set_ylim(-1, 1)
+        if simulation_nb == 0:
+            axs[3, index].text(2, 0.25, 'ratio={}%, {}'.format(ratio_significance, verdict))
+        else:
+            axs[3, index].text(2, 0.25, 'ratio={}%'.format(ratio_significance))
     plt.suptitle('Simulation {}'.format(simulation_nb))
     plt.tight_layout()
     plt.savefig("results_simulations/distributions_sim{}.png".format(simulation_nb))
     plt.close('all')
 
-    p_theoretical = results['intuitive_sol']['p_values'].copy()
-    p_theoretical.sort()
+
+
+
+    ###### PLOTTING SAME DATA RESULTS
     f, axs = plt.subplots(4, 5, figsize=(20, 8)) 
     for index, title in enumerate(['intuitive_sol', 'consensus', 'samedata_consensus', 'samedata_FFX', 'samedata_RFX']):
         # else    
@@ -452,48 +359,180 @@ def plot_simulation_results(simulation_nb, results):
         p_values = results[title]['p_values']
         ratio_significance = results[title]['ratio_significance']
         verdict = results[title]['verdict']
+        distrib = results[title]['distrib']
 
         # display p over t disctribution
+        # debug
+        print(title, p_values.shape, T_map.shape)
         df_obs = pandas.DataFrame(data=numpy.array([p_values, T_map]).T, columns=["p_values", "T_values"])
-        df_cum = df_obs.sort_values(by=['p_values'])
+        df_obs = df_obs.sort_values(by=['p_values'])
+        
+        t_expected = scipy.stats.norm.rvs(size=J)
+        p_expected = 1-scipy.stats.norm.cdf(t_expected)
+        df_exp = pandas.DataFrame(data=numpy.array([p_expected, t_expected]).T, columns=["p_expected", "t_expected"])
+        df_exp = df_exp.sort_values(by=['p_expected'])
+        p_expected = df_exp['p_expected'].values
+        t_expected = df_exp['t_expected'].values
+
+
         # t and p distribution
-        axs[0, index].plot(df_cum['T_values'].values, df_cum['p_values'].values, color='tab:blue')
-        axs[0, index].title.set_text(" {}\np values of t statistics (1-tail)".format(title))
-        axs[0, index].set_xlabel("t statistics")
-        axs[0, index].set_ylabel("p values")
+        axs[0, index].plot(df_obs['T_values'].values, df_obs['p_values'].values, color='tab:blue')
+        axs[0, index].title.set_text(" {}\np values of meta-analytic stats (1-tail)".format(title))
+        axs[0, index].set_xlabel("stats value")
+        axs[0, index].set_ylabel("p value")
         axs[0, index].set_xlim(0, 4)
 
-        axs[1, index].hist(df_cum['T_values'].values, bins=100, color='green')
-        axs[1, index].title.set_text("t statistics distribution")
+        axs[1, index].hist(df_obs['T_values'].values, bins=100, color='green')
+        axs[1, index].title.set_text("{}".format(distrib))
         axs[1, index].set_ylabel("frequency")
-        axs[1, index].set_xlabel("t value")
+        axs[1, index].set_xlabel("value")
 
-        axs[2, index].hist(df_cum['p_values'].values, bins=100, color='y')
+        axs[2, index].hist(df_obs['p_values'].values, bins=100, color='y')
         axs[2, index].title.set_text("p values distribution")
         axs[2, index].set_ylabel("frequency")
         axs[2, index].set_xlabel("p value")
 
-        p_obs_p_cum = df_cum['p_values'].values - p_theoretical
+        p_obs_p_cum = -numpy.log10(df_obs['p_values'].values) - -numpy.log10(p_cum) 
         # pobs-pcum and pcum distribution
-        axs[3, index].plot(-numpy.log10(p_theoretical), p_obs_p_cum, color='y')
+        axs[3, index].plot(-numpy.log10(p_cum), p_obs_p_cum, color='y')
         axs[3, index].title.set_text("p-plot")
         axs[3, index].set_xlabel("-log10 cumulative p")
         axs[3, index].set_ylabel("observed p - cumulative p")
         axs[3, index].axvline(-numpy.log10(0.05), ymin=-1, color='black', linewidth=0.5, linestyle='--')
         axs[3, index].axhline(0, color='black', linewidth=0.5, linestyle='--')
         axs[3, index].set_xlim(0, 6)
-        axs[3, index].set_ylim(-0.5, 0.5)
-        axs[3, index].text(2, 0.25, 'ratio={}%, {}'.format(ratio_significance, verdict))
+        axs[3, index].set_ylim(-1, 1)
+        if simulation_nb == 0:
+            axs[3, index].text(2, 0.25, 'ratio={}%, {}'.format(ratio_significance, verdict))
+        else:
+            axs[3, index].text(2, 0.25, 'ratio={}%'.format(ratio_significance))
         plt.suptitle('{}'.format(title))
     plt.suptitle('Simulation {}'.format(simulation_nb))
     plt.tight_layout()
     plt.savefig("results_simulations/distributions_samedata_sim{}.png".format(simulation_nb))
     plt.close('all') 
 
+
+
+    ###### PLOTTING different FFX RESULTS
+    f, axs = plt.subplots(4, 5, figsize=(20, 8)) 
+    for index, title in enumerate(['FFX_X2_n20', 'FFX_X2_n40', 'FFX_X2_n60', 'FFX_X2_n80', 'FFX_X2_n100']):
+        T_map = results[title]['T_map']
+        p_values = results[title]['p_values']
+        ratio_significance = results[title]['ratio_significance']
+        verdict = results[title]['verdict']
+        distrib = results[title]['distrib']
+        si2 = results[title]['si2'][0]
+                
+        n = int(title[-2:])
+        if n == 0: # last two digits are 00
+            n = 100
+        df= K*(n-1)-1
+
+        #original p values with si2 = 1s
+        FFX_1_pvalues = results[title]['FFX_ns_pvalues'][n]
+        FFX_1_pvalues.sort()
+
+        si2.sort()
+        # display p over t disctribution
+        df_obs = pandas.DataFrame(data=numpy.array([p_values, T_map]).T, columns=["p_values", "T_values"])
+        df_obs = df_obs.sort_values(by=['p_values'])
+
+
+
+        t_expected = scipy.stats.t.rvs(df=df, size=J)
+        p_expected = 1-scipy.stats.t.cdf(t_expected, df=df)
+
+        df_exp = pandas.DataFrame(data=numpy.array([p_expected, t_expected]).T, columns=["p_expected", "t_expected"])
+        df_exp = df_exp.sort_values(by=['p_expected'])
+        p_expected = df_exp['p_expected'].values
+        t_expected = df_exp['t_expected'].values
+
+        # t and p distribution
+
+        axs[0, index].plot(df_obs['T_values'].values, df_obs['p_values'].values, color='tab:blue')
+        # small window in
+        axs[0, index].title.set_text(" {}\np values of meta-analytic stats (1-tail)".format(title))
+        axs[0, index].set_xlabel("stats value")
+        axs[0, index].set_ylabel("p value")
+        
+        axs[0, index].set_xlim(0, 4)
+        add_small_graph(t=t_expected, p=p_expected, graph='plot', col=int(index), row=0)
+
+        axs[1, index].hist(si2, bins=100, color='purple')
+        axs[1, index].title.set_text("{}".format("si2 distribution"))
+        axs[1, index].set_ylabel("frequency")
+        axs[1, index].set_xlabel("si2 value")
+
+
+        axs[2, index].hist(df_obs['p_values'].values, bins=100, color='y')
+        axs[2, index].hist(p_expected, bins=100, color='grey', alpha=0.3)
+        axs[2, index].title.set_text("p values distribution")
+        axs[2, index].set_ylabel("frequency")
+        axs[2, index].set_xlabel("p value")
+        axs[2, index].axvline(0.05, ymin=0, color='black', linewidth=0.5, linestyle='--')
+
+        p_obs_p_cum = -numpy.log10(df_obs['p_values'].values) - -numpy.log10(p_cum) 
+        ffx_1_p_obs_p_cum = -numpy.log10(FFX_1_pvalues) - -numpy.log10(p_cum) 
+        
+        # pobs-pcum and pcum distribution
+        axs[3, index].plot(-numpy.log10(p_cum), p_obs_p_cum, color='y', label='si2=X2')
+        axs[3, index].plot(-numpy.log10(p_cum), ffx_1_p_obs_p_cum, color='red', label='si2=1s')
+        axs[3, index].title.set_text("p-plot")
+        axs[3, index].set_xlabel("-log10 cumulative p")
+        axs[3, index].set_ylabel("observed p - cumulative p")
+        axs[3, index].axvline(-numpy.log10(0.05), ymin=-1, color='black', linewidth=0.5, linestyle='--')
+        axs[3, index].axhline(0, color='black', linewidth=0.5, linestyle='--')
+        axs[3, index].set_xlim(0, 6)
+        axs[3, index].set_ylim(-1, 1)
+        axs[3, index].legend(loc='lower right')
+        if simulation_nb == 0:
+            axs[3, index].text(2, 0.5, 'ratio={}%, {}'.format(ratio_significance, verdict), color='y')
+        else:
+            axs[3, index].text(2, 0.5, 'ratio={}%'.format(ratio_significance), color='y')
+    plt.suptitle('Simulation {}'.format(simulation_nb))
+    plt.tight_layout()
+    plt.savefig("results_simulations/distributions_FFXs_sim{}.png".format(simulation_nb))
+    plt.close('all')
+
     print("Plotting done")
 
 
-
+def add_small_graph(t=None, p=None, graph='plot', col=0, row=0):
+    # first row
+    if (col==0 and row==0):
+        ax_supp = plt.axes([0.14, 0.83, 0.05, 0.05])
+    elif (col==1 and row==0):
+        ax_supp = plt.axes([0.34, 0.83, 0.05, 0.05])
+    elif (col==2 and row==0):
+        ax_supp = plt.axes([0.54, 0.83, 0.05, 0.05])
+    elif (col==3 and row==0):
+        ax_supp = plt.axes([0.73, 0.83, 0.05, 0.05])
+    elif (col==4 and row==0):
+        ax_supp = plt.axes([0.93, 0.83, 0.05, 0.05])
+    # second row
+    elif (col==0 and row==1):
+        ax_supp = plt.axes([0.14, 0.6, 0.05, 0.05])
+    elif (col==1 and row==1):
+        ax_supp = plt.axes([0.34, 0.6, 0.05, 0.05])
+    elif (col==2 and row==1):
+        ax_supp = plt.axes([0.54, 0.6, 0.05, 0.05])
+    elif (col==3 and row==1):
+        ax_supp = plt.axes([0.73, 0.6, 0.05, 0.05])
+    elif (col==4 and row==1):
+        ax_supp = plt.axes([0.93, 0.6, 0.05, 0.05])
+    else:
+        print('error : no more than 5 columns and 4 rows possible for drawing small graph')
+        stop
+    if graph=='plot':
+        ax_supp.plot(t, p, color='black', alpha=0.5)
+        ax_supp.set_xlim(0, 4)
+    elif graph=='plot_fisher':
+        ax_supp.plot(t, p, color='black', alpha=0.5)
+    elif graph=='hist':
+        ax_supp.hist(t, bins=100, color='black', alpha=0.5)
+    # ax_supp.set_xticks([])
+    ax_supp.set_yticks([])
 
 
 
